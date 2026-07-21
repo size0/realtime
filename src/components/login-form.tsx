@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import Link from "next/link";
 import { AudioLines, LockKeyhole } from "lucide-react";
 
 export function LoginForm() {
@@ -52,7 +53,7 @@ export function LoginForm() {
         <div className="auth-heading">
           <span className="eyebrow">SECURE ACCESS</span>
           <h1 id="login-title">登录声场</h1>
-          <p>账号由管理员在后台创建。登录后才能使用实时语音与后端模型。</p>
+          <p>普通访客无需注册；此入口供管理员和已有账号使用。</p>
         </div>
         <form className="auth-form" onSubmit={submit}>
           <label>
@@ -86,6 +87,7 @@ export function LoginForm() {
             <span>{submitting ? "正在登录…" : "安全登录"}</span>
           </button>
         </form>
+        <Link className="auth-footnote auth-admin-link" href="/">免登录进入语音对话</Link>
         <p className="auth-footnote">会话保存在加密签名的 HttpOnly Cookie 中</p>
       </section>
     </main>

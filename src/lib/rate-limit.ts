@@ -3,12 +3,15 @@ const MAX_CONNECTION_ATTEMPTS = 6;
 const MAX_REPLY_ATTEMPTS = 60;
 const MAX_LOGIN_ATTEMPTS = 10;
 const MAX_ADMIN_MUTATIONS = 30;
+const GUEST_CREATION_WINDOW_MS = 60 * 60 * 1000;
+const MAX_GUEST_CREATIONS = 5;
 
 type Bucket = { count: number; resetAt: number };
 const connectionBuckets = new Map<string, Bucket>();
 const replyBuckets = new Map<string, Bucket>();
 const loginBuckets = new Map<string, Bucket>();
 const adminMutationBuckets = new Map<string, Bucket>();
+const guestCreationBuckets = new Map<string, Bucket>();
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -20,10 +23,11 @@ function checkRateLimit(
   identifier: string,
   maxAttempts: number,
   now: number,
+  windowMs = WINDOW_MS,
 ): RateLimitResult {
   const current = buckets.get(identifier);
   if (!current || current.resetAt <= now) {
-    buckets.set(identifier, { count: 1, resetAt: now + WINDOW_MS });
+    buckets.set(identifier, { count: 1, resetAt: now + windowMs });
     return { allowed: true, retryAfterSeconds: 0 };
   }
 
@@ -60,6 +64,19 @@ export function checkAdminMutationRateLimit(
   return checkRateLimit(adminMutationBuckets, identifier, MAX_ADMIN_MUTATIONS, now);
 }
 
+export function checkGuestCreationRateLimit(
+  identifier: string,
+  now = Date.now(),
+): RateLimitResult {
+  return checkRateLimit(
+    guestCreationBuckets,
+    identifier,
+    MAX_GUEST_CREATIONS,
+    now,
+    GUEST_CREATION_WINDOW_MS,
+  );
+}
+
 export function resetConnectionRateLimitForTests(): void {
   connectionBuckets.clear();
 }
@@ -74,4 +91,8 @@ export function resetAdminMutationRateLimitForTests(): void {
 
 export function resetReplyRateLimitForTests(): void {
   replyBuckets.clear();
+}
+
+export function resetGuestCreationRateLimitForTests(): void {
+  guestCreationBuckets.clear();
 }

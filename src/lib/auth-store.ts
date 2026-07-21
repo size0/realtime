@@ -9,7 +9,12 @@ const MIN_PASSWORD_LENGTH = 10;
 const MAX_PASSWORD_LENGTH = 128;
 
 export type UserRole = "admin" | "user";
+export type AccountType = "managed" | "guest";
 export type UsageKind = "realtimeConnections" | "replies";
+
+export interface DailyUsage extends Record<UsageKind, number> {
+  date: string;
+}
 
 interface StoredUser {
   id: string;
@@ -18,11 +23,13 @@ interface StoredUser {
   passwordHash: string;
   passwordSalt: string;
   role: UserRole;
+  accountType?: AccountType;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
   lastLoginAt?: number;
   usage: Record<UsageKind, number>;
+  dailyUsage?: DailyUsage;
 }
 
 interface UserDatabase {
@@ -35,11 +42,13 @@ export interface PublicUser {
   username: string;
   displayName: string;
   role: UserRole;
+  accountType: AccountType;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
   lastLoginAt?: number;
   usage: Record<UsageKind, number>;
+  dailyUsage: DailyUsage;
 }
 
 export class AuthStoreError extends Error {
@@ -95,6 +104,27 @@ function validateDisplayName(displayName: string): string {
   return normalized;
 }
 
+function chinaDateKey(now = Date.now()): string {
+  return new Date(now + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function dailyUsageFor(user: Pick<StoredUser, "dailyUsage">, now = Date.now()): DailyUsage {
+  const date = chinaDateKey(now);
+  return user.dailyUsage?.date === date
+    ? { ...user.dailyUsage }
+    : { date, realtimeConnections: 0, replies: 0 };
+}
+
+function isDailyUsage(value: unknown): value is DailyUsage {
+  if (typeof value !== "object" || value === null) return false;
+  const usage = value as Record<string, unknown>;
+  return (
+    typeof usage.date === "string" &&
+    typeof usage.realtimeConnections === "number" &&
+    typeof usage.replies === "number"
+  );
+}
+
 function isStoredUser(value: unknown): value is StoredUser {
   if (typeof value !== "object" || value === null) return false;
   const user = value as Record<string, unknown>;
@@ -106,13 +136,17 @@ function isStoredUser(value: unknown): value is StoredUser {
     typeof user.passwordHash === "string" &&
     typeof user.passwordSalt === "string" &&
     (user.role === "admin" || user.role === "user") &&
+    (user.accountType === undefined ||
+      user.accountType === "managed" ||
+      user.accountType === "guest") &&
     typeof user.enabled === "boolean" &&
     typeof user.createdAt === "number" &&
     typeof user.updatedAt === "number" &&
     typeof usage === "object" &&
     usage !== null &&
     typeof (usage as Record<string, unknown>).realtimeConnections === "number" &&
-    typeof (usage as Record<string, unknown>).replies === "number"
+    typeof (usage as Record<string, unknown>).replies === "number" &&
+    (user.dailyUsage === undefined || isDailyUsage(user.dailyUsage))
   );
 }
 
@@ -122,11 +156,13 @@ function publicUser(user: StoredUser): PublicUser {
     username: user.username,
     displayName: user.displayName,
     role: user.role,
+    accountType: user.accountType ?? "managed",
     enabled: user.enabled,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     lastLoginAt: user.lastLoginAt,
     usage: { ...user.usage },
+    dailyUsage: dailyUsageFor(user),
   };
 }
 
@@ -139,6 +175,7 @@ async function createStoredUser(input: {
   displayName: string;
   password: string;
   role: UserRole;
+  accountType?: AccountType;
 }): Promise<StoredUser> {
   const username = validateUsername(input.username);
   const displayName = validateDisplayName(input.displayName);
@@ -153,10 +190,12 @@ async function createStoredUser(input: {
     passwordHash,
     passwordSalt,
     role: input.role,
+    accountType: input.accountType ?? "managed",
     enabled: true,
     createdAt: now,
     updatedAt: now,
     usage: { realtimeConnections: 0, replies: 0 },
+    dailyUsage: dailyUsageFor({}),
   };
 }
 
@@ -171,7 +210,13 @@ async function bootstrapDatabase(): Promise<UserDatabase> {
 
   const username = process.env.ADMIN_USERNAME?.trim() || "admin";
   const displayName = process.env.ADMIN_DISPLAY_NAME?.trim() || "管理员";
-  const admin = await createStoredUser({ username, displayName, password, role: "admin" });
+  const admin = await createStoredUser({
+    username,
+    displayName,
+    password,
+    role: "admin",
+    accountType: "managed",
+  });
   return { version: STORE_VERSION, users: [admin] };
 }
 
@@ -288,11 +333,63 @@ export async function createUser(input: {
       displayName: input.displayName,
       password: input.password,
       role: input.role ?? "user",
+      accountType: "managed",
     });
     database.users.push(user);
     await writeDatabaseUnlocked(database);
     return publicUser(user);
   });
+}
+
+export async function createGuestUser(): Promise<PublicUser> {
+  return serialized(async () => {
+    const database = await loadDatabase();
+    let username = "";
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = `guest_${randomBytes(5).toString("hex")}`;
+      if (!database.users.some((user) => user.username === candidate)) {
+        username = candidate;
+        break;
+      }
+    }
+    if (!username) throw new AuthStoreError("USER_EXISTS", "暂时无法生成访客账号。");
+
+    const suffix = username.slice(-6).toUpperCase();
+    const user = await createStoredUser({
+      username,
+      displayName: `访客 ${suffix}`,
+      password: randomBytes(32).toString("base64url"),
+      role: "user",
+      accountType: "guest",
+    });
+    user.lastLoginAt = Date.now();
+    user.updatedAt = user.lastLoginAt;
+    database.users.push(user);
+    await writeDatabaseUnlocked(database);
+    return publicUser(user);
+  });
+}
+
+function configuredGuestLimit(kind: UsageKind): number {
+  const key =
+    kind === "realtimeConnections"
+      ? "GUEST_DAILY_CONNECTION_LIMIT"
+      : "GUEST_DAILY_REPLY_LIMIT";
+  const fallback = kind === "realtimeConnections" ? 10 : 50;
+  const configured = Number(process.env[key]);
+  return Number.isInteger(configured) && configured > 0 && configured <= 10_000
+    ? configured
+    : fallback;
+}
+
+export function usageAllowance(
+  user: PublicUser,
+  kind: UsageKind,
+): { allowed: boolean; limit: number | null; used: number } {
+  if (user.accountType !== "guest") return { allowed: true, limit: null, used: 0 };
+  const limit = configuredGuestLimit(kind);
+  const used = user.dailyUsage[kind];
+  return { allowed: used < limit, limit, used };
 }
 
 export async function setUserEnabled(id: string, enabled: boolean): Promise<PublicUser> {
@@ -312,8 +409,11 @@ export async function recordUsage(id: string, kind: UsageKind): Promise<void> {
     const database = await loadDatabase();
     const user = database.users.find((candidate) => candidate.id === id);
     if (!user || !user.enabled) return;
+    const now = Date.now();
     user.usage[kind] += 1;
-    user.updatedAt = Date.now();
+    user.dailyUsage = dailyUsageFor(user, now);
+    user.dailyUsage[kind] += 1;
+    user.updatedAt = now;
     await writeDatabaseUnlocked(database);
   });
 }

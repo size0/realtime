@@ -4,10 +4,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   authenticateUser,
+  createGuestUser,
   createUser,
+  getUserById,
   listUsers,
+  recordUsage,
   resetAuthStoreForTests,
   setUserEnabled,
+  usageAllowance,
 } from "@/lib/auth-store";
 import {
   createSession,
@@ -37,6 +41,7 @@ describe("authentication store and signed sessions", () => {
     delete process.env.ADMIN_DISPLAY_NAME;
     delete process.env.ADMIN_PASSWORD;
     delete process.env.SESSION_SECRET;
+    delete process.env.GUEST_DAILY_REPLY_LIMIT;
     await rm(directory, { recursive: true, force: true });
   });
 
@@ -70,5 +75,22 @@ describe("authentication store and signed sessions", () => {
     await setUserEnabled(user.id, false);
     expect(await getRequestSession(request)).toBeNull();
     expect((await listUsers()).find((entry) => entry.id === user.id)?.enabled).toBe(false);
+  });
+
+  it("creates passwordless guests and enforces their configurable daily allowance", async () => {
+    process.env.GUEST_DAILY_REPLY_LIMIT = "1";
+    const guest = await createGuestUser();
+    expect(guest).toMatchObject({ role: "user", accountType: "guest", enabled: true });
+    expect(guest.username).toMatch(/^guest_[a-f0-9]{10}$/);
+    expect(usageAllowance(guest, "replies")).toMatchObject({ allowed: true, limit: 1, used: 0 });
+
+    await recordUsage(guest.id, "replies");
+    const updated = await getUserById(guest.id);
+    expect(updated?.dailyUsage.replies).toBe(1);
+    expect(usageAllowance(updated!, "replies")).toMatchObject({ allowed: false, limit: 1, used: 1 });
+
+    const stored = await readFile(process.env.APP_DATA_FILE!, "utf8");
+    expect(stored).not.toContain('"password":"');
+    delete process.env.GUEST_DAILY_REPLY_LIMIT;
   });
 });

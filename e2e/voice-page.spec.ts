@@ -8,14 +8,16 @@ async function login(page: Page) {
   await expect(page).toHaveURL("/");
 }
 
-test("requires login and renders the fixed Tina voice console", async ({ page }) => {
+test("automatically creates a guest and renders all supported voices", async ({ page }) => {
   await page.goto("/");
-  await expect(page).toHaveURL(/\/login$/);
-  await login(page);
   await expect(page.getByRole("heading", { name: "对话记录" })).toBeVisible();
   await expect(page.getByRole("button", { name: "开始对话" })).toBeVisible();
-  await expect(page.getByText("甜甜 Tina")).toBeVisible();
-  await expect(page.getByRole("combobox")).toHaveCount(0);
+  await expect(page.getByText(/访客 [A-F0-9]{6}/)).toBeVisible();
+  const voiceSelect = page.getByRole("combobox", { name: "选择音色" });
+  await expect(voiceSelect).toHaveValue("Tina");
+  await expect(voiceSelect.locator("option")).toHaveCount(8);
+  await voiceSelect.selectOption("Ethan");
+  await expect(voiceSelect).toHaveValue("Ethan");
   await expect(page.getByText("准备就绪")).toBeVisible();
 
   await page.getByRole("button", { name: "隐藏字幕" }).first().click();
@@ -24,7 +26,7 @@ test("requires login and renders the fixed Tina voice console", async ({ page })
   await expect(page.getByText("对话会出现在这里")).toBeVisible();
 });
 
-test("restores and clears local transcript history after login", async ({ page }) => {
+test("restores and clears local transcript history for an automatic guest", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem(
       "realtime-voice.transcript.v1",
@@ -42,7 +44,7 @@ test("restores and clears local transcript history after login", async ({ page }
       }),
     );
   });
-  await login(page);
+  await page.goto("/");
   await expect(page.getByText("这是保存在浏览器里的记录。")).toBeVisible();
   await page.getByRole("button", { name: "清空对话记录" }).click();
   await expect(page.getByText("对话会出现在这里")).toBeVisible();
@@ -53,7 +55,7 @@ test("restores and clears local transcript history after login", async ({ page }
 
 test("shows a useful configuration error without calling the live service", async ({ page, context }) => {
   await context.grantPermissions(["microphone"], { origin: "http://127.0.0.1:3100" });
-  await page.route("**/api/realtime/connect", async (route) => {
+  await page.route("**/api/realtime/connect?*", async (route) => {
     await route.fulfill({
       status: 503,
       contentType: "application/json",
@@ -65,7 +67,7 @@ test("shows a useful configuration error without calling the live service", asyn
       }),
     });
   });
-  await login(page);
+  await page.goto("/");
   await page.getByRole("button", { name: "开始对话" }).click();
   await expect(page.getByText("还缺少百炼业务空间 ID，请在百炼控制台复制后配置。")).toBeVisible({
     timeout: 20_000,

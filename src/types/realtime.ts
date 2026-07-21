@@ -1,6 +1,34 @@
-export const REALTIME_VOICES = ["Tina"] as const;
+export const REALTIME_VOICES = [
+  "Tina",
+  "Liora Mira",
+  "Serena",
+  "Cindy",
+  "Sunnybobi",
+  "Ethan",
+  "Raymond",
+  "Theo Calm",
+] as const;
 
 export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
+
+export const REALTIME_VOICE_OPTIONS: ReadonlyArray<{
+  value: RealtimeVoice;
+  label: string;
+  description: string;
+}> = [
+  { value: "Tina", label: "甜甜 Tina", description: "甜美温暖" },
+  { value: "Liora Mira", label: "清欢 Liora Mira", description: "自然温柔" },
+  { value: "Serena", label: "苏瑶 Serena", description: "柔和亲切" },
+  { value: "Cindy", label: "林欣宜 Cindy", description: "台湾口音" },
+  { value: "Sunnybobi", label: "知芝 Sunnybobi", description: "邻家活泼" },
+  { value: "Ethan", label: "晨煦 Ethan", description: "阳光男声" },
+  { value: "Raymond", label: "林川野 Raymond", description: "清亮男声" },
+  { value: "Theo Calm", label: "Theo Calm", description: "沉稳治愈" },
+];
+
+export function isRealtimeVoice(value: string): value is RealtimeVoice {
+  return (REALTIME_VOICES as readonly string[]).includes(value);
+}
 
 export type CallStatus =
   | "idle"

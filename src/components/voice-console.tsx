@@ -7,7 +7,9 @@ import {
   AudioLines,
   Captions,
   CaptionsOff,
+  ChevronDown,
   LockKeyhole,
+  LogIn,
   LogOut,
   Mic,
   MicOff,
@@ -19,7 +21,12 @@ import {
 } from "lucide-react";
 import { useRealtimeVoice } from "@/hooks/use-realtime-voice";
 import type { PublicUser } from "@/lib/auth-store";
-import type { CallStatus } from "@/types/realtime";
+import { DEFAULT_REALTIME_VOICE } from "@/lib/qwen-session";
+import {
+  REALTIME_VOICE_OPTIONS,
+  type CallStatus,
+  type RealtimeVoice,
+} from "@/types/realtime";
 
 const STATUS_COPY: Record<CallStatus, { title: string; detail: string }> = {
   idle: { title: "准备就绪", detail: "戴上耳机，开启一段自然对话" },
@@ -48,6 +55,7 @@ interface VoiceConsoleProps {
 
 export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
   const [showCaptions, setShowCaptions] = useState(true);
+  const [selectedVoice, setSelectedVoice] = useState<RealtimeVoice>(DEFAULT_REALTIME_VOICE);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const {
     callStatus,
@@ -61,7 +69,7 @@ export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
     endCall,
     toggleMute,
     clearTranscript,
-  } = useRealtimeVoice();
+  } = useRealtimeVoice(selectedVoice);
 
   const status = STATUS_COPY[callStatus];
 
@@ -102,9 +110,16 @@ export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
             </Link>
           )}
           <span className="account-chip">{user.displayName}</span>
-          <button className="topbar-action" type="button" onClick={() => void logout()} aria-label="退出登录">
-            <LogOut size={15} />
-          </button>
+          {user.accountType === "guest" ? (
+            <Link className="topbar-action" href="/login" aria-label="管理员或已有账号登录">
+              <LogIn size={15} />
+              <span>账号登录</span>
+            </Link>
+          ) : (
+            <button className="topbar-action" type="button" onClick={() => void logout()} aria-label="退出登录">
+              <LogOut size={15} />
+            </button>
+          )}
         </div>
       </header>
 
@@ -137,10 +152,21 @@ export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
 
           {!isActive ? (
             <div className="start-cluster">
-              <span className="voice-select-label">固定音色</span>
-              <div className="voice-fixed-chip" aria-label="固定音色 Tina">
-                <strong>甜甜 Tina</strong>
-                <span>温暖甜美 · 固定声线</span>
+              <label className="voice-select-label" htmlFor="voice-select">选择音色</label>
+              <div className="voice-select-wrap">
+                <select
+                  id="voice-select"
+                  value={selectedVoice}
+                  onChange={(event) => setSelectedVoice(event.target.value as RealtimeVoice)}
+                  aria-label="选择音色"
+                >
+                  {REALTIME_VOICE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label} · {option.description}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={17} aria-hidden="true" />
               </div>
               <button className="start-button" type="button" onClick={() => void connect()}>
                 {callStatus === "error" ? <RotateCcw size={19} /> : <Mic size={19} />}

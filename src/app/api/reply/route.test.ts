@@ -4,10 +4,14 @@ import { resetReplyRateLimitForTests } from "@/lib/rate-limit";
 const authMocks = vi.hoisted(() => ({
   getRequestSession: vi.fn(),
   recordUsage: vi.fn(),
+  usageAllowance: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({ getRequestSession: authMocks.getRequestSession }));
-vi.mock("@/lib/auth-store", () => ({ recordUsage: authMocks.recordUsage }));
+vi.mock("@/lib/auth-store", () => ({
+  recordUsage: authMocks.recordUsage,
+  usageAllowance: authMocks.usageAllowance,
+}));
 
 import { POST } from "@/app/api/reply/route";
 
@@ -48,6 +52,7 @@ describe("POST /api/reply", () => {
       csrfToken: "csrf-test",
     });
     authMocks.recordUsage.mockResolvedValue(undefined);
+    authMocks.usageAllowance.mockReturnValue({ allowed: true, limit: null, used: 0 });
     configure();
   });
 
@@ -65,6 +70,14 @@ describe("POST /api/reply", () => {
     authMocks.getRequestSession.mockResolvedValueOnce(null);
     const response = await POST(makeRequest());
     expect(response.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("stops a guest at the persistent daily reply limit", async () => {
+    authMocks.usageAllowance.mockReturnValueOnce({ allowed: false, limit: 50, used: 50 });
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "GUEST_DAILY_LIMIT" } });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

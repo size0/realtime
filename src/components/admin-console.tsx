@@ -143,7 +143,13 @@ export function AdminConsole({ initialUsers, currentUserId, csrfToken }: AdminCo
                   <div className="user-avatar"><CircleUserRound size={22} /></div>
                   <div className="user-identity">
                     <strong>{user.displayName}</strong>
-                    <span>@{user.username} · {user.role === "admin" ? "管理员" : "普通用户"}</span>
+                    <span>
+                      @{user.username} · {user.role === "admin"
+                        ? "管理员"
+                        : user.accountType === "guest"
+                          ? "自动访客"
+                          : "普通用户"}
+                    </span>
                   </div>
                   <div className="user-usage">
                     <span>{user.usage.realtimeConnections} 次连接</span>

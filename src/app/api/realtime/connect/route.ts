@@ -1,6 +1,7 @@
 import { checkConnectionRateLimit } from "@/lib/rate-limit";
 import { getRequestSession } from "@/lib/auth-session";
-import { recordUsage } from "@/lib/auth-store";
+import { recordUsage, usageAllowance } from "@/lib/auth-store";
+import { isRealtimeVoice } from "@/types/realtime";
 import {
   createQwenRealtimeUrl,
   DEFAULT_QWEN_REALTIME_MODEL,
@@ -68,6 +69,11 @@ export async function POST(request: Request): Promise<Response> {
   const session = await getRequestSession(request);
   if (!session) return errorResponse("UNAUTHENTICATED", "请先登录。", 401);
 
+  const voice = new URL(request.url).searchParams.get("voice") ?? "Tina";
+  if (!isRealtimeVoice(voice)) {
+    return errorResponse("INVALID_VOICE", "请选择支持的音色。", 400);
+  }
+
   const contentType = request.headers.get("content-type")?.split(";")[0]?.trim();
   if (contentType !== "application/sdp") {
     return errorResponse("INVALID_SDP", "请求必须使用 application/sdp。", 415);
@@ -83,6 +89,15 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("RATE_LIMITED", "连接请求过于频繁。", 429, {
       "Retry-After": String(rateLimit.retryAfterSeconds),
     });
+  }
+
+  const allowance = usageAllowance(session.user, "realtimeConnections");
+  if (!allowance.allowed) {
+    return errorResponse(
+      "GUEST_DAILY_LIMIT",
+      `今日访客语音连接额度已用完（${allowance.limit} 次），请明天再试。`,
+      429,
+    );
   }
 
   const apiKey = process.env.DASHSCOPE_API_KEY;
@@ -146,7 +161,7 @@ export async function POST(request: Request): Promise<Response> {
       return errorResponse("QWEN_UNAVAILABLE", "实时语音服务返回了无效连接信息。", 502);
     }
 
-    void recordUsage(session.user.id, "realtimeConnections").catch(() => undefined);
+    await recordUsage(session.user.id, "realtimeConnections");
     return new Response(answerSdp, {
       status: 200,
       headers: {

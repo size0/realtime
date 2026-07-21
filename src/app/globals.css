@@ -962,6 +962,31 @@ button.topbar-action {
   text-align: center;
 }
 
+.auth-admin-link {
+  display: block;
+  color: var(--signal);
+  text-decoration: none;
+}
+
+.guest-loading {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.guest-spinner {
+  color: var(--signal);
+  animation: guest-spin 0.9s linear infinite;
+}
+
+@keyframes guest-spin {
+  to { transform: rotate(360deg); }
+}
+
 .admin-shell {
   overflow: auto;
 }

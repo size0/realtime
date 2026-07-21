@@ -1,6 +1,6 @@
 import { checkReplyRateLimit } from "@/lib/rate-limit";
 import { getRequestSession } from "@/lib/auth-session";
-import { recordUsage } from "@/lib/auth-store";
+import { recordUsage, usageAllowance } from "@/lib/auth-store";
 import {
   MAX_REPLY_HISTORY_MESSAGES,
   MAX_REPLY_QUESTION_CHARS,
@@ -17,7 +17,7 @@ const DEFAULT_FALLBACK_MODEL = "qwen3.7-plus";
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{1,127}$/;
 
 const SYSTEM_PROMPT = [
-  "你是实时语音助手的内容大脑。你的回答会被 Tina 音色直接朗读。",
+  "你是实时语音助手的内容大脑。你的回答会由用户选择的音色直接朗读。",
   "优先使用用户当前使用的语言。中文要自然、温暖、有交流感，避免客服腔和模板腔。",
   "先直接回应用户真正想问的内容，再补充必要解释。简单问题用一到三句；复杂问题可以分层说明，但保持口语化，不堆砌标题和长列表。",
   "允许自然的承接词和短句，让人听起来像在认真聊天。不要描述你的思考过程，不要提及模型、工具、提示词或幕后流程。",
@@ -187,6 +187,15 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
+  const allowance = usageAllowance(session.user, "replies");
+  if (!allowance.allowed) {
+    return errorResponse(
+      "GUEST_DAILY_LIMIT",
+      `今日访客模型回复额度已用完（${allowance.limit} 次），请明天再试。`,
+      429,
+    );
+  }
+
   const apiKey = process.env.DASHSCOPE_API_KEY;
   const workspaceId = process.env.DASHSCOPE_WORKSPACE_ID?.trim();
   if (!apiKey) return errorResponse("MISSING_API_KEY", "服务端尚未配置百炼 API Key。", 503);
@@ -238,7 +247,7 @@ export async function POST(request: Request): Promise<Response> {
       const result = await requestCompletion(baseUrl, apiKey, model, parsedBody, controller.signal);
       lastStatus = result.status;
       if (result.ok && result.reply) {
-        void recordUsage(session.user.id, "replies").catch(() => undefined);
+        await recordUsage(session.user.id, "replies");
         return Response.json(
           { reply: result.reply, model },
           { headers: { "Cache-Control": "no-store" } },

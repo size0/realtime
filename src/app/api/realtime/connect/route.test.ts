@@ -4,17 +4,22 @@ import { resetConnectionRateLimitForTests } from "@/lib/rate-limit";
 const authMocks = vi.hoisted(() => ({
   getRequestSession: vi.fn(),
   recordUsage: vi.fn(),
+  usageAllowance: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({ getRequestSession: authMocks.getRequestSession }));
-vi.mock("@/lib/auth-store", () => ({ recordUsage: authMocks.recordUsage }));
+vi.mock("@/lib/auth-store", () => ({
+  recordUsage: authMocks.recordUsage,
+  usageAllowance: authMocks.usageAllowance,
+}));
 
 import { POST } from "@/app/api/realtime/connect/route";
 
 const VALID_SDP = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
 
-function makeRequest(options?: { origin?: string; body?: string; ip?: string }) {
-  return new Request("http://localhost:3000/api/realtime/connect", {
+function makeRequest(options?: { origin?: string; body?: string; ip?: string; voice?: string }) {
+  const voice = options?.voice ? `?voice=${encodeURIComponent(options.voice)}` : "";
+  return new Request(`http://localhost:3000/api/realtime/connect${voice}`, {
     method: "POST",
     headers: {
       Origin: options?.origin ?? "http://localhost:3000",
@@ -51,6 +56,7 @@ describe("POST /api/realtime/connect", () => {
       csrfToken: "csrf-test",
     });
     authMocks.recordUsage.mockResolvedValue(undefined);
+    authMocks.usageAllowance.mockReturnValue({ allowed: true, limit: null, used: 0 });
     clearEnvironment();
   });
 
@@ -82,6 +88,23 @@ describe("POST /api/realtime/connect", () => {
     configureQwen();
     const response = await POST(makeRequest({ body: "not-sdp" }));
     expect(response.status).toBe(400);
+  });
+
+  it("accepts only the supported voice whitelist", async () => {
+    configureQwen();
+    const response = await POST(makeRequest({ voice: "unsupported-voice" }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_VOICE" } });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("stops a guest at the persistent daily connection limit", async () => {
+    configureQwen();
+    authMocks.usageAllowance.mockReturnValueOnce({ allowed: false, limit: 10, used: 10 });
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "GUEST_DAILY_LIMIT" } });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("proxies raw SDP to Qwen, records usage and never exposes the server key", async () => {

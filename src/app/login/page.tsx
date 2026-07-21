@@ -4,6 +4,6 @@ import { getCurrentSession } from "@/lib/auth-session";
 
 export default async function LoginPage() {
   const session = await getCurrentSession();
-  if (session) redirect("/");
+  if (session && session.user.accountType !== "guest") redirect("/");
   return <LoginForm />;
 }

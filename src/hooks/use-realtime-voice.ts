@@ -20,7 +20,7 @@ import {
   loadTranscript,
   saveTranscript,
 } from "@/lib/transcript-storage";
-import type { CallStatus, RealtimeServerEvent } from "@/types/realtime";
+import type { CallStatus, RealtimeServerEvent, RealtimeVoice } from "@/types/realtime";
 
 const CONNECTION_TIMEOUT_MS = 20_000;
 const ICE_GATHERING_TIMEOUT_MS = 10_000;
@@ -106,7 +106,7 @@ function waitForIceGatheringComplete(peerConnection: RTCPeerConnection): Promise
   });
 }
 
-export function useRealtimeVoice() {
+export function useRealtimeVoice(voice: RealtimeVoice) {
   const [state, dispatch] = useReducer(realtimeReducer, initialRealtimeState);
   const [isMuted, setIsMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
@@ -397,7 +397,7 @@ export function useRealtimeVoice() {
           if (!event || isDuplicateRealtimeEvent(event, seenEventIdsRef.current)) return;
 
           if (event.type === "session.created" && !sessionConfiguredRef.current) {
-            channel.send(JSON.stringify(createQwenSessionUpdate()));
+            channel.send(JSON.stringify(createQwenSessionUpdate(voice)));
             sessionConfiguredRef.current = true;
             localStreamRef.current?.getAudioTracks().forEach((track) => {
               track.enabled = !mutedRef.current;
@@ -462,7 +462,7 @@ export function useRealtimeVoice() {
       const timeoutId = window.setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS);
       let response: Response;
       try {
-        response = await fetch("/api/realtime/connect", {
+        response = await fetch(`/api/realtime/connect?voice=${encodeURIComponent(voice)}`, {
           method: "POST",
           headers: { "Content-Type": "application/sdp" },
           body: offerSdp,
@@ -480,7 +480,7 @@ export function useRealtimeVoice() {
       if (connectionAttemptRef.current !== attempt) return;
       failAttempt(mapBrowserError(error));
     }
-  }, [disposeResources, startMeter]);
+  }, [disposeResources, startMeter, voice]);
 
   const endCall = useCallback(() => {
     connectionAttemptRef.current += 1;
