@@ -7,9 +7,12 @@ const API_ERROR_MESSAGES: Record<string, string> = {
   QWEN_WORKSPACE: "百炼业务空间 ID、地域或 WebRTC 接入地址不正确。",
   RATE_LIMITED: "连接请求过于频繁，请稍后再试。",
   QWEN_UNAVAILABLE: "千问实时语音服务暂时不可用，请稍后重试。",
+  REPLY_RATE_LIMITED: "后端回复模型请求过多，请稍后再说一次。",
+  REPLY_TIMEOUT: "后端回复模型响应超时，请再说一次。",
+  REPLY_UNAVAILABLE: "后端回复模型暂时不可用，请稍后再说一次。",
+  INVALID_REPLY_REQUEST: "后端回复请求格式无效，请重新连接。",
   INVALID_SDP: "浏览器生成的语音连接信息无效，请重新连接。",
   INVALID_ORIGIN: "当前页面来源未获准访问语音接口。",
-  INVALID_VOICE: "所选音色不可用，请更换后重试。",
 };
 
 export function mapApiError(code: string | undefined, fallback?: string): string {

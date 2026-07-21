@@ -1,29 +1,25 @@
 "use client";
 
 import type { CSSProperties } from "react";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
   Captions,
   CaptionsOff,
-  ChevronDown,
   LockKeyhole,
+  LogOut,
   Mic,
   MicOff,
   PhoneOff,
   Radio,
   RotateCcw,
+  Settings,
   Trash2,
 } from "lucide-react";
 import { useRealtimeVoice } from "@/hooks/use-realtime-voice";
-import type { CallStatus, RealtimeVoice } from "@/types/realtime";
-
-const VOICE_OPTIONS: Array<{ value: RealtimeVoice; label: string; description: string }> = [
-  { value: "Tina", label: "甜甜 Tina", description: "温暖甜美" },
-  { value: "Ethan", label: "晨煦 Ethan", description: "阳光有活力" },
-  { value: "Theo Calm", label: "予安 Theo", description: "沉静治愈" },
-  { value: "Serena", label: "苏瑶 Serena", description: "温柔自然" },
-];
+import type { PublicUser } from "@/lib/auth-store";
+import type { CallStatus } from "@/types/realtime";
 
 const STATUS_COPY: Record<CallStatus, { title: string; detail: string }> = {
   idle: { title: "准备就绪", detail: "戴上耳机，开启一段自然对话" },
@@ -45,8 +41,12 @@ function formatDuration(totalSeconds: number): string {
 
 type OrbStyle = CSSProperties & { "--audio-level": number };
 
-export function VoiceConsole() {
-  const [voice, setVoice] = useState<RealtimeVoice>("Tina");
+interface VoiceConsoleProps {
+  user: PublicUser;
+  csrfToken: string;
+}
+
+export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
   const [showCaptions, setShowCaptions] = useState(true);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const {
@@ -61,9 +61,17 @@ export function VoiceConsole() {
     endCall,
     toggleMute,
     clearTranscript,
-  } = useRealtimeVoice(voice);
+  } = useRealtimeVoice();
 
   const status = STATUS_COPY[callStatus];
+
+  const logout = async () => {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrfToken },
+    }).catch(() => undefined);
+    window.location.assign("/login");
+  };
 
   useEffect(() => {
     if (showCaptions && messages.length > 0) {
@@ -82,9 +90,21 @@ export function VoiceConsole() {
           <span>声场</span>
           <small>REALTIME</small>
         </a>
-        <div className="privacy-chip">
-          <LockKeyhole size={13} />
-          <span>仅保存文字 · 本地设备</span>
+        <div className="topbar-actions">
+          <div className="privacy-chip">
+            <LockKeyhole size={13} />
+            <span>仅保存文字 · 本地设备</span>
+          </div>
+          {user.role === "admin" && (
+            <Link className="topbar-action" href="/admin" aria-label="打开管理后台">
+              <Settings size={15} />
+              <span>后台</span>
+            </Link>
+          )}
+          <span className="account-chip">{user.displayName}</span>
+          <button className="topbar-action" type="button" onClick={() => void logout()} aria-label="退出登录">
+            <LogOut size={15} />
+          </button>
         </div>
       </header>
 
@@ -117,21 +137,10 @@ export function VoiceConsole() {
 
           {!isActive ? (
             <div className="start-cluster">
-              <label className="voice-select-label" htmlFor="voice-select">对话音色</label>
-              <div className="voice-select-wrap">
-                <select
-                  id="voice-select"
-                  value={voice}
-                  onChange={(event) => setVoice(event.target.value as RealtimeVoice)}
-                  aria-label="选择对话音色"
-                >
-                  {VOICE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label} · {option.description}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={16} aria-hidden="true" />
+              <span className="voice-select-label">固定音色</span>
+              <div className="voice-fixed-chip" aria-label="固定音色 Tina">
+                <strong>甜甜 Tina</strong>
+                <span>温暖甜美 · 固定声线</span>
               </div>
               <button className="start-button" type="button" onClick={() => void connect()}>
                 {callStatus === "error" ? <RotateCcw size={19} /> : <Mic size={19} />}

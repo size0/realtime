@@ -1,4 +1,6 @@
 import { checkConnectionRateLimit } from "@/lib/rate-limit";
+import { getRequestSession } from "@/lib/auth-session";
+import { recordUsage } from "@/lib/auth-store";
 import {
   createQwenRealtimeUrl,
   DEFAULT_QWEN_REALTIME_MODEL,
@@ -6,7 +8,6 @@ import {
   isValidWorkspaceId,
   type QwenRegion,
 } from "@/lib/realtime-session";
-import { isRealtimeVoice } from "@/types/realtime";
 
 export const runtime = "nodejs";
 
@@ -64,6 +65,9 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("INVALID_ORIGIN", "请求来源不匹配。", 403);
   }
 
+  const session = await getRequestSession(request);
+  if (!session) return errorResponse("UNAUTHENTICATED", "请先登录。", 401);
+
   const contentType = request.headers.get("content-type")?.split(";")[0]?.trim();
   if (contentType !== "application/sdp") {
     return errorResponse("INVALID_SDP", "请求必须使用 application/sdp。", 415);
@@ -74,12 +78,7 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("INVALID_SDP", "SDP 内容过大。", 413);
   }
 
-  const voiceValue = new URL(request.url).searchParams.get("voice") ?? "Tina";
-  if (!isRealtimeVoice(voiceValue)) {
-    return errorResponse("INVALID_VOICE", "不支持该音色。", 400);
-  }
-
-  const rateLimit = checkConnectionRateLimit(clientIdentifier(request));
+  const rateLimit = checkConnectionRateLimit(`${clientIdentifier(request)}:${session.user.id}`);
   if (!rateLimit.allowed) {
     return errorResponse("RATE_LIMITED", "连接请求过于频繁。", 429, {
       "Retry-After": String(rateLimit.retryAfterSeconds),
@@ -147,6 +146,7 @@ export async function POST(request: Request): Promise<Response> {
       return errorResponse("QWEN_UNAVAILABLE", "实时语音服务返回了无效连接信息。", 502);
     }
 
+    void recordUsage(session.user.id, "realtimeConnections").catch(() => undefined);
     return new Response(answerSdp, {
       status: 200,
       headers: {

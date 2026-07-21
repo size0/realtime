@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { mapApiError, mapBrowserError } from "@/lib/client-errors";
-import { createQwenSessionUpdate } from "@/lib/qwen-session";
+import { createQwenSessionUpdate, GENERATE_REPLY_TOOL_NAME } from "@/lib/qwen-session";
+import {
+  createFunctionCallOutputEvent,
+  createReplyHistory,
+  createResponseEvent,
+  parseReplyToolArguments,
+} from "@/lib/reply-tool";
 import {
   initialRealtimeState,
   isDuplicateRealtimeEvent,
@@ -14,14 +20,32 @@ import {
   loadTranscript,
   saveTranscript,
 } from "@/lib/transcript-storage";
-import type { CallStatus, RealtimeVoice } from "@/types/realtime";
+import type { CallStatus, RealtimeServerEvent } from "@/types/realtime";
 
 const CONNECTION_TIMEOUT_MS = 20_000;
 const ICE_GATHERING_TIMEOUT_MS = 10_000;
 const DISCONNECTED_GRACE_MS = 3_000;
+const REPLY_TIMEOUT_MS = 35_000;
+
+type ReplyToolDoneEvent = Extract<
+  RealtimeServerEvent,
+  { type: "response.function_call_arguments.done" }
+>;
 
 interface ApiErrorPayload {
   error?: { code?: string; message?: string };
+}
+
+interface ReplyApiPayload {
+  reply: string;
+}
+
+function isReplyApiPayload(value: unknown): value is ReplyApiPayload {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).reply === "string"
+  );
 }
 
 function isApiErrorPayload(value: unknown): value is ApiErrorPayload {
@@ -82,7 +106,7 @@ function waitForIceGatheringComplete(peerConnection: RTCPeerConnection): Promise
   });
 }
 
-export function useRealtimeVoice(voice: RealtimeVoice) {
+export function useRealtimeVoice() {
   const [state, dispatch] = useReducer(realtimeReducer, initialRealtimeState);
   const [isMuted, setIsMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
@@ -93,6 +117,9 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const replyAbortControllerRef = useRef<AbortController | null>(null);
+  const replyGenerationRef = useRef(0);
+  const pendingToolCallRef = useRef<{ channel: RTCDataChannel; callId: string } | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analysersRef = useRef<AnalyserNode[]>([]);
   const audioSourcesRef = useRef<MediaStreamAudioSourceNode[]>([]);
@@ -105,6 +132,7 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
   const sessionConfiguredRef = useRef(false);
   const mutedRef = useRef(false);
   const disconnectedTimerRef = useRef<number | null>(null);
+  const messagesRef = useRef(state.messages);
 
   const stopMeter = useCallback(() => {
     if (meterFrameRef.current !== null) cancelAnimationFrame(meterFrameRef.current);
@@ -157,6 +185,10 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
   const disposeResources = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    replyGenerationRef.current += 1;
+    replyAbortControllerRef.current?.abort();
+    replyAbortControllerRef.current = null;
+    pendingToolCallRef.current = null;
 
     if (disconnectedTimerRef.current !== null) {
       window.clearTimeout(disconnectedTimerRef.current);
@@ -273,6 +305,91 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
         }
       };
 
+      const runReplyTool = async (channel: RTCDataChannel, event: ReplyToolDoneEvent) => {
+        if (event.name !== GENERATE_REPLY_TOOL_NAME) {
+          failAttempt("实时模型请求了未知工具，请重新连接。");
+          return;
+        }
+
+        let question: string;
+        try {
+          question = parseReplyToolArguments(event.arguments).question;
+        } catch {
+          if (channel.readyState === "open") {
+            channel.send(
+              JSON.stringify(
+                createFunctionCallOutputEvent(event.call_id, "抱歉，我没有听清楚，请再说一次。"),
+              ),
+            );
+            channel.send(JSON.stringify(createResponseEvent()));
+          }
+          return;
+        }
+
+        replyAbortControllerRef.current?.abort();
+        const controller = new AbortController();
+        replyAbortControllerRef.current = controller;
+        const generation = replyGenerationRef.current + 1;
+        replyGenerationRef.current = generation;
+        pendingToolCallRef.current = { channel, callId: event.call_id };
+        dispatch({ type: "set-status", status: "thinking" });
+
+        const timeoutId = window.setTimeout(() => controller.abort(), REPLY_TIMEOUT_MS);
+        try {
+          const response = await fetch("/api/reply", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question,
+              history: createReplyHistory(messagesRef.current),
+            }),
+            signal: controller.signal,
+          });
+
+          if (!response.ok) throw new Error(await readApiError(response));
+          const payload: unknown = await response.json();
+          if (!isReplyApiPayload(payload) || !payload.reply.trim()) {
+            throw new Error("后端回复模型返回了空内容，请再试一次。");
+          }
+          if (
+            replyGenerationRef.current !== generation ||
+            connectionAttemptRef.current !== attempt ||
+            channel.readyState !== "open"
+          ) {
+            return;
+          }
+
+          channel.send(
+            JSON.stringify(createFunctionCallOutputEvent(event.call_id, payload.reply.trim())),
+          );
+          channel.send(JSON.stringify(createResponseEvent()));
+        } catch (error: unknown) {
+          if (
+            controller.signal.aborted ||
+            replyGenerationRef.current !== generation ||
+            connectionAttemptRef.current !== attempt
+          ) {
+            return;
+          }
+          if (channel.readyState === "open") {
+            const message =
+              error instanceof Error && error.message
+                ? error.message
+                : "后端回复模型暂时不可用，请稍后再试。";
+            channel.send(JSON.stringify(createFunctionCallOutputEvent(event.call_id, message)));
+            channel.send(JSON.stringify(createResponseEvent()));
+          }
+        } finally {
+          window.clearTimeout(timeoutId);
+          if (replyAbortControllerRef.current === controller) {
+            replyAbortControllerRef.current = null;
+          }
+          if (pendingToolCallRef.current?.callId === event.call_id) {
+            pendingToolCallRef.current = null;
+          }
+        }
+      };
+
       const handleMessage = (channel: RTCDataChannel, messageEvent: MessageEvent<string>) => {
         try {
           const raw: unknown = JSON.parse(messageEvent.data);
@@ -280,11 +397,33 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
           if (!event || isDuplicateRealtimeEvent(event, seenEventIdsRef.current)) return;
 
           if (event.type === "session.created" && !sessionConfiguredRef.current) {
-            channel.send(JSON.stringify(createQwenSessionUpdate(voice)));
+            channel.send(JSON.stringify(createQwenSessionUpdate()));
             sessionConfiguredRef.current = true;
             localStreamRef.current?.getAudioTracks().forEach((track) => {
               track.enabled = !mutedRef.current;
             });
+          }
+
+          if (event.type === "input_audio_buffer.speech_started") {
+            replyGenerationRef.current += 1;
+            replyAbortControllerRef.current?.abort();
+            replyAbortControllerRef.current = null;
+            const pending = pendingToolCallRef.current;
+            if (pending?.channel.readyState === "open") {
+              pending.channel.send(
+                JSON.stringify(
+                  createFunctionCallOutputEvent(
+                    pending.callId,
+                    "用户已经开始新的发言，忽略本次回复，不要继续生成。",
+                  ),
+                ),
+              );
+            }
+            pendingToolCallRef.current = null;
+          }
+
+          if (event.type === "response.function_call_arguments.done") {
+            void runReplyTool(channel, event);
           }
 
           if (event.type === "session.updated" && !callStartedAtRef.current) {
@@ -323,7 +462,7 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
       const timeoutId = window.setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS);
       let response: Response;
       try {
-        response = await fetch(`/api/realtime/connect?voice=${encodeURIComponent(voice)}`, {
+        response = await fetch("/api/realtime/connect", {
           method: "POST",
           headers: { "Content-Type": "application/sdp" },
           body: offerSdp,
@@ -341,7 +480,7 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
       if (connectionAttemptRef.current !== attempt) return;
       failAttempt(mapBrowserError(error));
     }
-  }, [disposeResources, startMeter, voice]);
+  }, [disposeResources, startMeter]);
 
   const endCall = useCallback(() => {
     connectionAttemptRef.current += 1;
@@ -362,6 +501,10 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
     if (typeof window !== "undefined") clearStoredTranscript(window.localStorage);
     dispatch({ type: "clear-messages" });
   }, []);
+
+  useEffect(() => {
+    messagesRef.current = state.messages;
+  }, [state.messages]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

@@ -1,4 +1,4 @@
-export const REALTIME_VOICES = ["Tina", "Ethan", "Theo Calm", "Serena"] as const;
+export const REALTIME_VOICES = ["Tina"] as const;
 
 export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
 
@@ -38,6 +38,19 @@ type RealtimeServerEventCore =
   | { type: "response.audio.delta" }
   | { type: "response.audio.done" | "response.done" }
   | {
+      type: "response.function_call_arguments.delta";
+      item_id: string;
+      call_id: string;
+      delta: string;
+    }
+  | {
+      type: "response.function_call_arguments.done";
+      item_id: string;
+      call_id: string;
+      name: string;
+      arguments: string;
+    }
+  | {
       type: "conversation.item.input_audio_transcription.delta";
       item_id: string;
       delta: string;
@@ -66,7 +79,3 @@ type RealtimeServerEventCore =
   | { type: "unknown"; originalType: string };
 
 export type RealtimeServerEvent = RealtimeServerEventCore & { eventId?: string };
-
-export function isRealtimeVoice(value: string | null): value is RealtimeVoice {
-  return REALTIME_VOICES.some((voice) => voice === value);
-}

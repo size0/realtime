@@ -48,6 +48,26 @@ describe("Qwen Realtime event handling", () => {
     ).toMatchObject({ item_id: "assistant_2", transcript: "完整回答" });
   });
 
+  it("parses completed reply tool calls with their authoritative arguments", () => {
+    expect(
+      parseRealtimeEvent({
+        event_id: "evt_tool",
+        type: "response.function_call_arguments.done",
+        item_id: "tool_1",
+        call_id: "call_1",
+        name: "generate_reply",
+        arguments: '{"question":"解释量子纠缠"}',
+      }),
+    ).toEqual({
+      eventId: "evt_tool",
+      type: "response.function_call_arguments.done",
+      item_id: "tool_1",
+      call_id: "call_1",
+      name: "generate_reply",
+      arguments: '{"question":"解释量子纠缠"}',
+    });
+  });
+
   it("rejects malformed boundary values", () => {
     expect(parseRealtimeEvent(null)).toBeNull();
     expect(parseRealtimeEvent({ type: "response.audio_transcript.delta" })).toBeNull();

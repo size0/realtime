@@ -42,6 +42,30 @@ export function parseRealtimeEvent(value: unknown): RealtimeServerEvent | null {
     case "response.audio.done":
     case "response.done":
       return { type, eventId };
+    case "response.function_call_arguments.delta": {
+      const itemId = readString(value, "item_id");
+      const callId = readString(value, "call_id");
+      const delta = readString(value, "delta");
+      return itemId && callId && delta !== null
+        ? { type, item_id: itemId, call_id: callId, delta, eventId }
+        : null;
+    }
+    case "response.function_call_arguments.done": {
+      const itemId = readString(value, "item_id");
+      const callId = readString(value, "call_id");
+      const name = readString(value, "name");
+      const argumentsValue = readString(value, "arguments");
+      return itemId && callId && name && argumentsValue !== null
+        ? {
+            type,
+            item_id: itemId,
+            call_id: callId,
+            name,
+            arguments: argumentsValue,
+            eventId,
+          }
+        : null;
+    }
     case "conversation.item.input_audio_transcription.delta": {
       const itemId = readString(value, "item_id");
       const text = readString(value, "text");
@@ -209,6 +233,8 @@ export function realtimeReducer(state: RealtimeState, action: RealtimeAction): R
       };
     case "input_audio_buffer.speech_stopped":
     case "response.created":
+    case "response.function_call_arguments.delta":
+    case "response.function_call_arguments.done":
       return { ...state, callStatus: "thinking" };
     case "response.audio.delta":
       return { ...state, callStatus: "speaking" };

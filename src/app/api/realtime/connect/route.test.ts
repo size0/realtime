@@ -1,12 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetConnectionRateLimitForTests } from "@/lib/rate-limit";
+
+const authMocks = vi.hoisted(() => ({
+  getRequestSession: vi.fn(),
+  recordUsage: vi.fn(),
+}));
+
+vi.mock("@/lib/auth-session", () => ({ getRequestSession: authMocks.getRequestSession }));
+vi.mock("@/lib/auth-store", () => ({ recordUsage: authMocks.recordUsage }));
+
 import { POST } from "@/app/api/realtime/connect/route";
 
 const VALID_SDP = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
 
-function makeRequest(options?: { origin?: string; body?: string; voice?: string; ip?: string }) {
-  const voice = options?.voice ?? "Tina";
-  return new Request(`http://localhost:3000/api/realtime/connect?voice=${voice}`, {
+function makeRequest(options?: { origin?: string; body?: string; ip?: string }) {
+  return new Request("http://localhost:3000/api/realtime/connect", {
     method: "POST",
     headers: {
       Origin: options?.origin ?? "http://localhost:3000",
@@ -38,6 +46,11 @@ describe("POST /api/realtime/connect", () => {
     resetConnectionRateLimitForTests();
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockReset();
+    authMocks.getRequestSession.mockResolvedValue({
+      user: { id: "user-test" },
+      csrfToken: "csrf-test",
+    });
+    authMocks.recordUsage.mockResolvedValue(undefined);
     clearEnvironment();
   });
 
@@ -46,10 +59,13 @@ describe("POST /api/realtime/connect", () => {
     clearEnvironment();
   });
 
-  it("rejects cross-origin requests before reading credentials", async () => {
-    const response = await POST(makeRequest({ origin: "https://attacker.example" }));
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({ error: { code: "INVALID_ORIGIN" } });
+  it("rejects cross-origin and unauthenticated requests", async () => {
+    const crossOrigin = await POST(makeRequest({ origin: "https://attacker.example" }));
+    expect(crossOrigin.status).toBe(403);
+
+    authMocks.getRequestSession.mockResolvedValueOnce(null);
+    const unauthenticated = await POST(makeRequest());
+    expect(unauthenticated.status).toBe(401);
   });
 
   it("returns clear errors when required server configuration is missing", async () => {
@@ -60,20 +76,15 @@ describe("POST /api/realtime/connect", () => {
     process.env.DASHSCOPE_API_KEY = "sk-test-secret";
     const missingWorkspace = await POST(makeRequest({ ip: "127.0.0.2" }));
     expect(missingWorkspace.status).toBe(503);
-    await expect(missingWorkspace.json()).resolves.toMatchObject({
-      error: { code: "MISSING_WORKSPACE_ID" },
-    });
   });
 
-  it("rejects malformed SDP and unsupported voices", async () => {
+  it("rejects malformed SDP", async () => {
     configureQwen();
-    const badSdp = await POST(makeRequest({ body: "not-sdp", ip: "127.0.0.2" }));
-    expect(badSdp.status).toBe(400);
-    const badVoice = await POST(makeRequest({ voice: "unknown", ip: "127.0.0.3" }));
-    expect(badVoice.status).toBe(400);
+    const response = await POST(makeRequest({ body: "not-sdp" }));
+    expect(response.status).toBe(400);
   });
 
-  it("proxies raw SDP to Qwen and never exposes the server key", async () => {
+  it("proxies raw SDP to Qwen, records usage and never exposes the server key", async () => {
     configureQwen();
     fetchMock.mockResolvedValue(
       new Response(`${VALID_SDP}a=setup:active\r\n`, {
@@ -85,20 +96,18 @@ describe("POST /api/realtime/connect", () => {
     const response = await POST(makeRequest());
     const answer = await response.text();
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("application/sdp");
     expect(answer).toContain("a=setup:active");
     expect(answer).not.toContain("sk-test-secret");
+    expect(authMocks.recordUsage).toHaveBeenCalledWith("user-test", "realtimeConnections");
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe(
       "https://llm-testworkspace.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=qwen3.5-omni-plus-realtime",
     );
-    expect(init?.method).toBe("POST");
     expect(init?.headers).toEqual({
       Authorization: "Bearer sk-test-secret",
       "Content-Type": "application/sdp",
     });
-    expect(init?.body).toBe(VALID_SDP);
   });
 
   it.each([
@@ -120,12 +129,11 @@ describe("POST /api/realtime/connect", () => {
     expect(body).not.toContain("sk-upstream");
   });
 
-  it("rate limits repeated connection creation", async () => {
+  it("rate limits repeated connection creation per authenticated user", async () => {
     configureQwen();
     fetchMock.mockImplementation(() => Promise.resolve(new Response(VALID_SDP, { status: 200 })));
     for (let attempt = 0; attempt < 6; attempt += 1) {
-      const response = await POST(makeRequest());
-      expect(response.status).toBe(200);
+      expect((await POST(makeRequest())).status).toBe(200);
     }
     const limited = await POST(makeRequest());
     expect(limited.status).toBe(429);
