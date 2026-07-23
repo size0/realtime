@@ -70,6 +70,14 @@ describe("POST /api/reply", () => {
     delete process.env.DASHSCOPE_REASONING_MODEL;
     delete process.env.DASHSCOPE_REASONING_FALLBACK_MODEL;
     delete process.env.DASHSCOPE_TEXT_BASE_URL;
+    delete process.env.ECONOMY_REASONING_API_KEY;
+    delete process.env.ECONOMY_REASONING_BASE_URL;
+    delete process.env.ECONOMY_REASONING_MODEL;
+    delete process.env.ECONOMY_REASONING_FALLBACK_MODEL;
+    delete process.env.STRONG_REASONING_API_KEY;
+    delete process.env.STRONG_REASONING_BASE_URL;
+    delete process.env.STRONG_REASONING_MODEL;
+    delete process.env.STRONG_REASONING_FALLBACK_MODEL;
   });
 
   it("requires a valid login", async () => {
@@ -135,8 +143,28 @@ describe("POST /api/reply", () => {
       model: string;
       enable_thinking?: boolean;
     };
-    expect(requestBody.model).toBe("qwen3.7-max");
+    expect(requestBody.model).toBe("qwen3.5-flash");
     expect(requestBody.enable_thinking).toBe(false);
+    await expect(response.clone().json()).resolves.toMatchObject({ tier: "economy" });
+  });
+
+  it("routes complex questions to the configured strong GPT provider", async () => {
+    process.env.DASHSCOPE_API_KEY = "sk-dashscope-test";
+    process.env.DASHSCOPE_WORKSPACE_ID = "llm-testworkspace";
+    fetchMock.mockResolvedValue(completion("这是复杂问题的回答。"));
+
+    const response = await POST(
+      makeRequest({
+        question: "请比较三种数据库架构的利弊，并给出完整迁移方案和故障恢复步骤",
+        history: [],
+      }),
+    );
+    const payload = (await response.json()) as { tier: string; model: string };
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({ tier: "strong", model: "gpt-5.5" });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.reasoning.test/v1/chat/completions",
+    );
   });
 
   it("maps authentication errors without exposing upstream details", async () => {

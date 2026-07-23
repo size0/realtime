@@ -20,6 +20,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useRealtimeVoice } from "@/hooks/use-realtime-voice";
+import { useSplitVoice } from "@/hooks/use-split-voice";
 import type { PublicUser } from "@/lib/auth-store";
 import { DEFAULT_REALTIME_VOICE } from "@/lib/qwen-session";
 import {
@@ -27,6 +28,7 @@ import {
   type CallStatus,
   type RealtimeVoice,
 } from "@/types/realtime";
+import type { VoiceMode } from "@/types/split-voice";
 
 const STATUS_COPY: Record<CallStatus, { title: string; detail: string }> = {
   idle: { title: "准备就绪", detail: "戴上耳机，开启一段自然对话" },
@@ -56,7 +58,15 @@ interface VoiceConsoleProps {
 export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
   const [showCaptions, setShowCaptions] = useState(true);
   const [selectedVoice, setSelectedVoice] = useState<RealtimeVoice>(DEFAULT_REALTIME_VOICE);
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>("economy");
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  const splitVoice = useSplitVoice("Cherry", csrfToken, voiceMode === "economy");
+  const realtimeVoice = useRealtimeVoice(
+    selectedVoice,
+    voiceMode === "qwen-realtime",
+  );
+  const voiceController =
+    voiceMode === "economy" ? splitVoice : realtimeVoice;
   const {
     callStatus,
     messages,
@@ -69,7 +79,7 @@ export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
     endCall,
     toggleMute,
     clearTranscript,
-  } = useRealtimeVoice(selectedVoice);
+  } = voiceController;
 
   const status = STATUS_COPY[callStatus];
 
@@ -138,7 +148,9 @@ export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
               <div className="orb-core"><Radio size={34} strokeWidth={1.4} /></div>
             </div>
             <span className="signal-note signal-note-top" aria-hidden="true">48 kHz</span>
-            <span className="signal-note signal-note-bottom" aria-hidden="true">WEBRTC / LIVE</span>
+            <span className="signal-note signal-note-bottom" aria-hidden="true">
+              {voiceMode === "economy" ? "LOCAL ASR / SPLIT" : "WEBRTC / LIVE"}
+            </span>
           </div>
 
           <div className="status-block" aria-live="polite">
@@ -152,27 +164,61 @@ export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
 
           {!isActive ? (
             <div className="start-cluster">
-              <label className="voice-select-label" htmlFor="voice-select">选择音色</label>
+              <label className="voice-select-label" htmlFor="voice-mode">
+                对话模式
+              </label>
               <div className="voice-select-wrap">
                 <select
-                  id="voice-select"
-                  value={selectedVoice}
-                  onChange={(event) => setSelectedVoice(event.target.value as RealtimeVoice)}
-                  aria-label="选择音色"
+                  id="voice-mode"
+                  value={voiceMode}
+                  onChange={(event) =>
+                    setVoiceMode(event.target.value as VoiceMode)
+                  }
+                  aria-label="选择对话模式"
                 >
-                  {REALTIME_VOICE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label} · {option.description}
-                    </option>
-                  ))}
+                  <option value="economy">省钱模式 · 本地识别 + 固定音色</option>
+                  <option value="qwen-realtime">高保真模式 · Qwen Realtime</option>
                 </select>
+                <ChevronDown size={17} aria-hidden="true" />
+              </div>
+              <label className="voice-select-label" htmlFor="voice-select">选择音色</label>
+              <div className="voice-select-wrap">
+                {voiceMode === "economy" ? (
+                  <select
+                    id="voice-select"
+                    value="Cherry"
+                    disabled
+                    aria-label="固定树洞音色"
+                  >
+                    <option value="Cherry">树洞 Cherry · 温柔陪伴</option>
+                  </select>
+                ) : (
+                  <select
+                    id="voice-select"
+                    value={selectedVoice}
+                    onChange={(event) =>
+                      setSelectedVoice(event.target.value as RealtimeVoice)
+                    }
+                    aria-label="选择音色"
+                  >
+                    {REALTIME_VOICE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label} · {option.description}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <ChevronDown size={17} aria-hidden="true" />
               </div>
               <button className="start-button" type="button" onClick={() => void connect()}>
                 {callStatus === "error" ? <RotateCcw size={19} /> : <Mic size={19} />}
                 <span>{callStatus === "error" ? "重新连接" : "开始对话"}</span>
               </button>
-              <p className="permission-note">开始后浏览器会请求麦克风权限</p>
+              <p className="permission-note">
+                {voiceMode === "economy"
+                  ? "本地断句与识别，回答文字生成后按句朗读"
+                  : "高保真回退模式会持续连接实时语音模型"}
+              </p>
             </div>
           ) : (
             <div className="call-controls" aria-label="通话控制">

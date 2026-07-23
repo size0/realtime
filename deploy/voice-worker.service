@@ -1,0 +1,29 @@
+[Unit]
+Description=Treehole split voice worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/realtime-voice/current/voice-worker
+EnvironmentFile=/etc/realtime-voice.env
+Environment=PYTHONUNBUFFERED=1
+Environment=MODELSCOPE_CACHE=/opt/realtime-voice/shared/model-cache/modelscope
+Environment=HF_HOME=/opt/realtime-voice/shared/model-cache/huggingface
+Environment=TORCH_HOME=/opt/realtime-voice/shared/model-cache/torch
+ExecStart=/opt/realtime-voice/shared/voice-worker-venv/bin/uvicorn voice_worker.main:app --host 127.0.0.1 --port 3503 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=900
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/realtime-voice/shared/model-cache
+
+[Install]
+WantedBy=multi-user.target
+

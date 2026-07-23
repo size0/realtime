@@ -8,11 +8,18 @@ async function login(page: Page) {
   await expect(page).toHaveURL("/");
 }
 
-test("automatically creates a guest and renders all supported voices", async ({ page }) => {
+test("automatically creates a guest and exposes economy plus high-fidelity modes", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "对话记录" })).toBeVisible();
   await expect(page.getByRole("button", { name: "开始对话" })).toBeVisible();
   await expect(page.getByText(/访客 [A-F0-9]{6}/)).toBeVisible();
+  const modeSelect = page.getByRole("combobox", { name: "选择对话模式" });
+  await expect(modeSelect).toHaveValue("economy");
+  const fixedVoice = page.getByRole("combobox", { name: "固定树洞音色" });
+  await expect(fixedVoice).toHaveValue("Cherry");
+  await expect(fixedVoice).toBeDisabled();
+
+  await modeSelect.selectOption("qwen-realtime");
   const voiceSelect = page.getByRole("combobox", { name: "选择音色" });
   await expect(voiceSelect).toHaveValue("Theo Calm");
   await expect(voiceSelect.locator("option")).toHaveCount(10);
@@ -55,21 +62,21 @@ test("restores and clears local transcript history for an automatic guest", asyn
 
 test("shows a useful configuration error without calling the live service", async ({ page, context }) => {
   await context.grantPermissions(["microphone"], { origin: "http://127.0.0.1:3100" });
-  await page.route("**/api/realtime/connect?*", async (route) => {
+  await page.route("**/api/voice/token", async (route) => {
     await route.fulfill({
       status: 503,
       contentType: "application/json",
       body: JSON.stringify({
         error: {
-          code: "MISSING_WORKSPACE_ID",
-          message: "服务端尚未配置百炼业务空间 ID。",
+          code: "VOICE_WORKER_NOT_CONFIGURED",
+          message: "低成本语音服务尚未完成安全配置。",
         },
       }),
     });
   });
   await page.goto("/");
   await page.getByRole("button", { name: "开始对话" }).click();
-  await expect(page.getByText("还缺少百炼业务空间 ID，请在百炼控制台复制后配置。")).toBeVisible({
+  await expect(page.getByText("低成本语音服务尚未配置，请切换高保真模式。")).toBeVisible({
     timeout: 20_000,
   });
   await expect(page.getByRole("button", { name: "重新连接" })).toBeVisible();

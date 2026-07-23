@@ -106,7 +106,7 @@ function waitForIceGatheringComplete(peerConnection: RTCPeerConnection): Promise
   });
 }
 
-export function useRealtimeVoice(voice: RealtimeVoice) {
+export function useRealtimeVoice(voice: RealtimeVoice, active = true) {
   const [state, dispatch] = useReducer(realtimeReducer, initialRealtimeState);
   const [isMuted, setIsMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
@@ -221,6 +221,7 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
   }, [stopMeter]);
 
   const connect = useCallback(async () => {
+    if (!active) return;
     if (!canUseMicrophone()) {
       dispatch({
         type: "set-error",
@@ -480,7 +481,7 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
       if (connectionAttemptRef.current !== attempt) return;
       failAttempt(mapBrowserError(error));
     }
-  }, [disposeResources, startMeter, voice]);
+  }, [active, disposeResources, startMeter, voice]);
 
   const endCall = useCallback(() => {
     connectionAttemptRef.current += 1;
@@ -507,15 +508,15 @@ export function useRealtimeVoice(voice: RealtimeVoice) {
   }, [state.messages]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (!active || typeof window === "undefined") return;
     dispatch({ type: "load-messages", messages: loadTranscript(window.localStorage) });
     hydratedRef.current = true;
-  }, []);
+  }, [active]);
 
   useEffect(() => {
-    if (!hydratedRef.current || typeof window === "undefined") return;
+    if (!active || !hydratedRef.current || typeof window === "undefined") return;
     saveTranscript(window.localStorage, state.messages);
-  }, [state.messages]);
+  }, [active, state.messages]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {

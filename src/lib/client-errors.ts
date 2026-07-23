@@ -15,6 +15,11 @@ const API_ERROR_MESSAGES: Record<string, string> = {
   INVALID_SDP: "浏览器生成的语音连接信息无效，请重新连接。",
   INVALID_VOICE: "当前音色不可用，请重新选择。",
   INVALID_ORIGIN: "当前页面来源未获准访问语音接口。",
+  INVALID_CSRF: "页面会话已过期，请刷新后重试。",
+  VOICE_WORKER_NOT_CONFIGURED: "低成本语音服务尚未配置，请切换高保真模式。",
+  WORKER_WARMING_UP: "低成本语音模型正在预热，请稍后重试或切换高保真模式。",
+  TTS_NOT_CONFIGURED: "固定音色服务尚未配置，请切换高保真模式。",
+  SESSION_ALREADY_ACTIVE: "该账号已有语音会话，请先结束另一端通话。",
 };
 
 export function mapApiError(code: string | undefined, fallback?: string): string {

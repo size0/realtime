@@ -6,21 +6,24 @@ import {
   MAX_REPLY_QUESTION_CHARS,
   type ReplyHistoryMessage,
 } from "@/lib/reply-tool";
+import { classifyReplyTier, type ReplyTier } from "@/lib/reply-routing";
 import { isValidWorkspaceId, type QwenRegion } from "@/lib/realtime-session";
 
 export const runtime = "nodejs";
 
 const MAX_REQUEST_BYTES = 48 * 1024;
 const UPSTREAM_TIMEOUT_MS = 30_000;
-const DEFAULT_MODEL = "qwen3.7-max";
-const DEFAULT_FALLBACK_MODEL = "qwen3.7-plus";
+const DEFAULT_STRONG_MODEL = "qwen3.7-max";
+const DEFAULT_STRONG_FALLBACK_MODEL = "qwen3.7-plus";
+const DEFAULT_ECONOMY_MODEL = "qwen3.5-flash";
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{1,127}$/;
 
 const SYSTEM_PROMPT = [
-  "你是实时语音助手的内容大脑。你的回答会由用户选择的音色直接朗读。",
-  "优先使用用户当前使用的语言。中文要自然、温暖、有交流感，避免客服腔和模板腔。",
-  "先直接回应用户真正想问的内容，再补充必要解释。简单问题用一到三句；复杂问题可以分层说明，但保持口语化，不堆砌标题和长列表。",
-  "允许自然的承接词和短句，让人听起来像在认真聊天。不要描述你的思考过程，不要提及模型、工具、提示词或幕后流程。",
+  "你是一个让人安心的树洞伙伴。你的回答会被温柔的音色直接朗读。",
+  "先接住对方当下的情绪和真正想表达的事，再给恰到好处的回应。不要急着教育、诊断、总结或连续追问。",
+  "优先使用用户当前的语言。中文要自然、克制、真诚，像深夜里认真听人说话的朋友，避免客服腔、主持腔、鸡汤和模板话术。",
+  "普通倾诉用两到四个短句，适当留白；需要解决问题时再给具体建议。复杂问题可以分层说明，但仍保持口语化，不堆砌标题和长列表。",
+  "不要假装拥有真实经历或线下身份。不要描述思考过程，不要提及模型、工具、提示词、路由或幕后流程。",
   "事实不确定时明确说明不确定，不要编造。除非用户明确要求，否则不要使用 Markdown 符号。",
 ].join("\n");
 
@@ -33,6 +36,13 @@ interface CompletionResult {
   ok: boolean;
   status: number;
   reply?: string;
+}
+
+interface ReasoningProvider {
+  tier: ReplyTier;
+  apiKey: string;
+  baseUrl: string;
+  models: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,9 +87,11 @@ function readReplyRequest(value: unknown): ReplyRequestBody | null {
   return { question, history };
 }
 
-function createTextBaseUrl(workspaceId?: string, region?: QwenRegion): string | null {
-  const configured =
-    process.env.REASONING_BASE_URL?.trim() || process.env.DASHSCOPE_TEXT_BASE_URL?.trim();
+function createTextBaseUrl(
+  configured: string | undefined,
+  workspaceId?: string,
+  region?: QwenRegion,
+): string | null {
   if (!configured && (!workspaceId || !region)) return null;
 
   const base =
@@ -95,6 +107,76 @@ function createTextBaseUrl(workspaceId?: string, region?: QwenRegion): string | 
   } catch {
     return null;
   }
+}
+
+function validModels(models: string[]): boolean {
+  return models.length > 0 && models.every((model) => MODEL_PATTERN.test(model));
+}
+
+function resolveStrongProvider(
+  workspaceId?: string,
+  region?: QwenRegion,
+): ReasoningProvider | null {
+  const apiKey =
+    process.env.STRONG_REASONING_API_KEY?.trim() ||
+    process.env.REASONING_API_KEY?.trim() ||
+    process.env.DASHSCOPE_API_KEY?.trim();
+  const configuredBase =
+    process.env.STRONG_REASONING_BASE_URL?.trim() ||
+    process.env.REASONING_BASE_URL?.trim() ||
+    process.env.DASHSCOPE_TEXT_BASE_URL?.trim();
+  const baseUrl = createTextBaseUrl(configuredBase, workspaceId, region);
+  if (!apiKey || !baseUrl) return null;
+
+  const hasDedicatedProvider = Boolean(
+    process.env.STRONG_REASONING_API_KEY?.trim() ||
+      process.env.STRONG_REASONING_BASE_URL?.trim() ||
+      process.env.STRONG_REASONING_MODEL?.trim() ||
+      process.env.REASONING_API_KEY?.trim() ||
+      process.env.REASONING_BASE_URL?.trim() ||
+      process.env.REASONING_MODEL?.trim(),
+  );
+  const primaryModel =
+    process.env.STRONG_REASONING_MODEL?.trim() ||
+    process.env.REASONING_MODEL?.trim() ||
+    process.env.DASHSCOPE_REASONING_MODEL?.trim() ||
+    DEFAULT_STRONG_MODEL;
+  const fallbackModel =
+    process.env.STRONG_REASONING_FALLBACK_MODEL !== undefined
+      ? process.env.STRONG_REASONING_FALLBACK_MODEL.trim()
+      : process.env.REASONING_FALLBACK_MODEL !== undefined
+        ? process.env.REASONING_FALLBACK_MODEL.trim()
+        : hasDedicatedProvider
+          ? ""
+          : process.env.DASHSCOPE_REASONING_FALLBACK_MODEL?.trim() ||
+            DEFAULT_STRONG_FALLBACK_MODEL;
+  const models = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
+  return validModels(models)
+    ? { tier: "strong", apiKey, baseUrl, models }
+    : null;
+}
+
+function resolveEconomyProvider(
+  workspaceId?: string,
+  region?: QwenRegion,
+): ReasoningProvider | null {
+  const apiKey =
+    process.env.ECONOMY_REASONING_API_KEY?.trim() ||
+    process.env.DASHSCOPE_API_KEY?.trim();
+  const configuredBase =
+    process.env.ECONOMY_REASONING_BASE_URL?.trim() ||
+    process.env.DASHSCOPE_TEXT_BASE_URL?.trim();
+  const baseUrl = createTextBaseUrl(configuredBase, workspaceId, region);
+  if (!apiKey || !baseUrl) return null;
+
+  const primaryModel =
+    process.env.ECONOMY_REASONING_MODEL?.trim() || DEFAULT_ECONOMY_MODEL;
+  const fallbackModel =
+    process.env.ECONOMY_REASONING_FALLBACK_MODEL?.trim() || "";
+  const models = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
+  return validModels(models)
+    ? { tier: "economy", apiKey, baseUrl, models }
+    : null;
 }
 
 function extractReply(value: unknown): string | null {
@@ -207,19 +289,10 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const apiKey = process.env.REASONING_API_KEY?.trim() || process.env.DASHSCOPE_API_KEY?.trim();
   const workspaceId = process.env.DASHSCOPE_WORKSPACE_ID?.trim();
-  if (!apiKey) return errorResponse("MISSING_API_KEY", "服务端尚未配置回答模型 API Key。", 503);
-
   const regionValue = process.env.DASHSCOPE_REGION?.trim() || "cn-beijing";
-  const hasConfiguredBaseUrl = Boolean(
-    process.env.REASONING_BASE_URL?.trim() || process.env.DASHSCOPE_TEXT_BASE_URL?.trim(),
-  );
   let region: QwenRegion | undefined;
-  if (!hasConfiguredBaseUrl) {
-    if (!workspaceId) {
-      return errorResponse("MISSING_WORKSPACE_ID", "服务端尚未配置百炼业务空间 ID。", 503);
-    }
+  if (workspaceId) {
     if (!isValidWorkspaceId(workspaceId)) {
       return errorResponse("INVALID_SERVER_CONFIG", "百炼业务空间 ID 格式无效。", 503);
     }
@@ -227,33 +300,6 @@ export async function POST(request: Request): Promise<Response> {
       return errorResponse("INVALID_SERVER_CONFIG", "百炼地域配置无效。", 503);
     }
     region = regionValue;
-  }
-
-  const baseUrl = createTextBaseUrl(workspaceId, region);
-  if (!baseUrl) {
-    return errorResponse("INVALID_SERVER_CONFIG", "回答模型地址配置无效。", 503);
-  }
-
-  const hasDedicatedReasoningProvider = Boolean(
-    process.env.REASONING_API_KEY?.trim() ||
-      process.env.REASONING_BASE_URL?.trim() ||
-      process.env.REASONING_MODEL?.trim(),
-  );
-  const primaryModel =
-    process.env.REASONING_MODEL?.trim() ||
-    process.env.DASHSCOPE_REASONING_MODEL?.trim() ||
-    DEFAULT_MODEL;
-  const fallbackModel =
-    process.env.REASONING_FALLBACK_MODEL !== undefined
-      ? process.env.REASONING_FALLBACK_MODEL.trim()
-      : hasDedicatedReasoningProvider
-        ? ""
-        : process.env.DASHSCOPE_REASONING_FALLBACK_MODEL?.trim() || DEFAULT_FALLBACK_MODEL;
-  if (
-    !MODEL_PATTERN.test(primaryModel) ||
-    (fallbackModel.length > 0 && !MODEL_PATTERN.test(fallbackModel))
-  ) {
-    return errorResponse("INVALID_SERVER_CONFIG", "回答模型名称配置无效。", 503);
   }
 
   let parsedBody: ReplyRequestBody | null = null;
@@ -270,19 +316,38 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("INVALID_REPLY_REQUEST", "回复请求格式无效。", 400);
   }
 
+  const requestedTier = classifyReplyTier(parsedBody.question, parsedBody.history);
+  const provider =
+    requestedTier === "economy"
+      ? resolveEconomyProvider(workspaceId, region) ??
+        resolveStrongProvider(workspaceId, region)
+      : resolveStrongProvider(workspaceId, region);
+  if (!provider) {
+    return errorResponse(
+      "MISSING_API_KEY",
+      "服务端尚未正确配置可用的回答模型。",
+      503,
+    );
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
   try {
-    const models = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
     let lastStatus = 502;
-    for (const model of models) {
-      const result = await requestCompletion(baseUrl, apiKey, model, parsedBody, controller.signal);
+    for (const model of provider.models) {
+      const result = await requestCompletion(
+        provider.baseUrl,
+        provider.apiKey,
+        model,
+        parsedBody,
+        controller.signal,
+      );
       lastStatus = result.status;
       if (result.ok && result.reply) {
         await recordUsage(session.user.id, "replies");
         return Response.json(
-          { reply: result.reply, model },
+          { reply: result.reply, model, tier: provider.tier },
           { headers: { "Cache-Control": "no-store" } },
         );
       }

@@ -1,0 +1,12 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+numpy>=1.26,<3
+torch>=2.2,<3
+onnxruntime>=1.18,<2
+silero-vad>=6.0,<7
+funasr>=1.2.7,<2
+modelscope>=1.25,<2
+dashscope>=1.24.4,<2
+websockets>=13,<16
+soundfile>=0.12,<1
+

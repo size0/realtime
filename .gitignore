@@ -46,3 +46,9 @@ yarn-error.log*
 next-env.d.ts
 
 .data/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+voice-worker/.venv/
