@@ -14,7 +14,8 @@ class SenseVoiceAsr:
             model=model_name,
             device="cpu",
             disable_update=True,
-            hub="ms",
+            hub="hf",
+            vad_kwargs={"max_single_segment_time": 30000},
         )
 
     def transcribe(self, pcm_s16le: bytes) -> str:

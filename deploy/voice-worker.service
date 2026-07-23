@@ -12,6 +12,7 @@ EnvironmentFile=/etc/realtime-voice.env
 Environment=PYTHONUNBUFFERED=1
 Environment=MODELSCOPE_CACHE=/opt/realtime-voice/shared/model-cache/modelscope
 Environment=HF_HOME=/opt/realtime-voice/shared/model-cache/huggingface
+Environment=HF_ENDPOINT=https://hf-mirror.com
 Environment=TORCH_HOME=/opt/realtime-voice/shared/model-cache/torch
 Environment=XDG_CACHE_HOME=/opt/realtime-voice/shared/model-cache
 ExecStart=/opt/realtime-voice/shared/voice-worker-venv/bin/uvicorn voice_worker.main:app --host 127.0.0.1 --port 3503 --workers 1 --no-access-log

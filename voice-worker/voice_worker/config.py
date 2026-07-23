@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 class Settings:
     app_origin: str
     worker_secret: str
-    asr_model: str = "iic/SenseVoiceSmall"
+    asr_model: str = "FunAudioLLM/SenseVoiceSmall"
     tts_model: str = "qwen3-tts-instruct-flash-realtime"
     tts_voice: str = "Cherry"
     tts_ws_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
@@ -44,7 +44,9 @@ class Settings:
         return cls(
             app_origin=app_origin,
             worker_secret=worker_secret,
-            asr_model=os.environ.get("VOICE_ASR_MODEL", "iic/SenseVoiceSmall").strip(),
+            asr_model=os.environ.get(
+                "VOICE_ASR_MODEL", "FunAudioLLM/SenseVoiceSmall"
+            ).strip(),
             tts_model=os.environ.get(
                 "VOICE_TTS_MODEL", "qwen3-tts-instruct-flash-realtime"
             ).strip(),
@@ -84,4 +86,3 @@ def _float_env(name: str, default: float, minimum: float, maximum: float) -> flo
     if not minimum <= value <= maximum:
         raise ValueError(f"{name} is outside the supported range.")
     return value
-
