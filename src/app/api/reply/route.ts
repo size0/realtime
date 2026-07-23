@@ -12,7 +12,8 @@ import { isValidWorkspaceId, type QwenRegion } from "@/lib/realtime-session";
 export const runtime = "nodejs";
 
 const MAX_REQUEST_BYTES = 48 * 1024;
-const UPSTREAM_TIMEOUT_MS = 30_000;
+const STRONG_UPSTREAM_TIMEOUT_MS = 20_000;
+const ECONOMY_UPSTREAM_TIMEOUT_MS = 12_000;
 const DEFAULT_STRONG_MODEL = "qwen3.7-max";
 const DEFAULT_STRONG_FALLBACK_MODEL = "qwen3.7-plus";
 const DEFAULT_ECONOMY_MODEL = "qwen3.5-flash";
@@ -238,6 +239,35 @@ async function requestCompletion(
   return reply ? { ok: true, status: upstream.status, reply } : { ok: false, status: 502 };
 }
 
+async function requestCompletionWithTimeout(
+  provider: ReasoningProvider,
+  model: string,
+  body: ReplyRequestBody,
+): Promise<CompletionResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    provider.tier === "strong"
+      ? STRONG_UPSTREAM_TIMEOUT_MS
+      : ECONOMY_UPSTREAM_TIMEOUT_MS,
+  );
+  try {
+    return await requestCompletion(
+      provider.baseUrl,
+      provider.apiKey,
+      model,
+      body,
+      controller.signal,
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 function mapUpstreamError(status: number) {
   if (status === 401) {
     return { code: "REASONING_AUTH", message: "回答模型 API Key 无效。", status: 502 };
@@ -317,12 +347,17 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const requestedTier = classifyReplyTier(parsedBody.question, parsedBody.history);
-  const provider =
+  const economyProvider = resolveEconomyProvider(workspaceId, region);
+  const strongProvider = resolveStrongProvider(workspaceId, region);
+  const providers =
     requestedTier === "economy"
-      ? resolveEconomyProvider(workspaceId, region) ??
-        resolveStrongProvider(workspaceId, region)
-      : resolveStrongProvider(workspaceId, region);
-  if (!provider) {
+      ? [economyProvider ?? strongProvider].filter(
+          (provider): provider is ReasoningProvider => provider !== null,
+        )
+      : [strongProvider, economyProvider].filter(
+          (provider): provider is ReasoningProvider => provider !== null,
+        );
+  if (providers.length === 0) {
     return errorResponse(
       "MISSING_API_KEY",
       "服务端尚未正确配置可用的回答模型。",
@@ -330,40 +365,53 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
-
-  try {
-    let lastStatus = 502;
+  let lastStatus = 502;
+  let timedOut = false;
+  let connectionFailed = false;
+  for (const provider of providers) {
     for (const model of provider.models) {
-      const result = await requestCompletion(
-        provider.baseUrl,
-        provider.apiKey,
-        model,
-        parsedBody,
-        controller.signal,
-      );
+      let result: CompletionResult;
+      try {
+        result = await requestCompletionWithTimeout(provider, model, parsedBody);
+      } catch (error: unknown) {
+        if (isAbortError(error)) timedOut = true;
+        else connectionFailed = true;
+        break;
+      }
       lastStatus = result.status;
       if (result.ok && result.reply) {
         await recordUsage(session.user.id, "replies");
         return Response.json(
-          { reply: result.reply, model, tier: provider.tier },
+          {
+            reply: result.reply,
+            model,
+            tier: provider.tier,
+            requestedTier,
+            fallback:
+              provider.tier !== requestedTier ||
+              model !== provider.models[0],
+          },
           { headers: { "Cache-Control": "no-store" } },
         );
       }
       if (result.status === 401 || result.status === 403) break;
     }
-
-    const mapped = mapUpstreamError(lastStatus);
-    return errorResponse(mapped.code, mapped.message, mapped.status);
-  } catch (error: unknown) {
-    const isTimeout = error instanceof DOMException && error.name === "AbortError";
-    return errorResponse(
-      isTimeout ? "REPLY_TIMEOUT" : "REPLY_UNAVAILABLE",
-      isTimeout ? "后端回复模型响应超时。" : "无法连接后端回复模型。",
-      isTimeout ? 504 : 502,
-    );
-  } finally {
-    clearTimeout(timeoutId);
   }
+
+  if (timedOut) {
+    return errorResponse(
+      "REPLY_TIMEOUT",
+      "后端回复模型响应超时。",
+      504,
+    );
+  }
+  if (connectionFailed) {
+    return errorResponse(
+      "REPLY_UNAVAILABLE",
+      "无法连接后端回复模型。",
+      502,
+    );
+  }
+  const mapped = mapUpstreamError(lastStatus);
+  return errorResponse(mapped.code, mapped.message, mapped.status);
 }

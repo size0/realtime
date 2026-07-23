@@ -187,10 +187,43 @@ describe("POST /api/reply", () => {
       }),
     );
     const pending = POST(makeRequest());
-    await vi.advanceTimersByTimeAsync(30_001);
+    await vi.advanceTimersByTimeAsync(20_001);
     const response = await pending;
     expect(response.status).toBe(504);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "REPLY_TIMEOUT" } });
+  });
+
+  it("falls back to the economy provider when the strong provider times out", async () => {
+    vi.useFakeTimers();
+    process.env.DASHSCOPE_API_KEY = "sk-dashscope-test";
+    process.env.DASHSCOPE_WORKSPACE_ID = "llm-testworkspace";
+    fetchMock
+      .mockImplementationOnce((_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+      )
+      .mockResolvedValueOnce(completion("已自动降级并返回。"));
+
+    const pending = POST(
+      makeRequest({
+        question: "请详细分析一个高并发数据库架构的完整实施方案。",
+        history: [],
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(20_001);
+    const response = await pending;
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      tier: "economy",
+      requestedTier: "strong",
+      fallback: true,
+      model: "qwen3.5-flash",
+    });
   });
 
   it("rejects malformed body before calling the model", async () => {
