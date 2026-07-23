@@ -7,7 +7,7 @@ import {
 } from "@/lib/qwen-session";
 
 describe("Qwen session configuration", () => {
-  it("defaults to Tina, accepts a selected voice and routes every reply through the tool", () => {
+  it("defaults to Theo Calm, accepts a selected voice and routes every reply through the tool", () => {
     vi.stubGlobal("crypto", { randomUUID: () => "test-id" });
     const update = createQwenSessionUpdate("Ethan");
     expect(update).toMatchObject({
@@ -37,6 +37,7 @@ describe("Qwen session configuration", () => {
     });
     expect(update.session.instructions).toContain("必须先调用 generate_reply");
     expect(update.session.instructions).toContain("Ethan");
+    expect(DEFAULT_REALTIME_VOICE).toBe("Theo Calm");
     expect(createQwenSessionUpdate().session.voice).toBe(DEFAULT_REALTIME_VOICE);
     expect(VAD_SILENCE_DURATION_MS).toBe(1_500);
     vi.unstubAllGlobals();

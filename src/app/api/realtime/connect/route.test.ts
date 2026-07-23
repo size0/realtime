@@ -125,7 +125,7 @@ describe("POST /api/realtime/connect", () => {
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe(
-      "https://llm-testworkspace.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=qwen3.5-omni-plus-realtime",
+      "https://llm-testworkspace.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=qwen3.5-omni-flash-realtime",
     );
     expect(init?.headers).toEqual({
       Authorization: "Bearer sk-test-secret",

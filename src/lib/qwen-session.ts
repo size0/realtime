@@ -1,6 +1,6 @@
 import type { RealtimeVoice } from "@/types/realtime";
 
-export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "Tina";
+export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "Theo Calm";
 export const GENERATE_REPLY_TOOL_NAME = "generate_reply";
 export const VAD_SILENCE_DURATION_MS = 1_500;
 

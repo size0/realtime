@@ -9,6 +9,7 @@ import {
   isValidWorkspaceId,
   type QwenRegion,
 } from "@/lib/realtime-session";
+import { DEFAULT_REALTIME_VOICE } from "@/lib/qwen-session";
 
 export const runtime = "nodejs";
 
@@ -69,7 +70,7 @@ export async function POST(request: Request): Promise<Response> {
   const session = await getRequestSession(request);
   if (!session) return errorResponse("UNAUTHENTICATED", "请先登录。", 401);
 
-  const voice = new URL(request.url).searchParams.get("voice") ?? "Tina";
+  const voice = new URL(request.url).searchParams.get("voice") ?? DEFAULT_REALTIME_VOICE;
   if (!isRealtimeVoice(voice)) {
     return errorResponse("INVALID_VOICE", "请选择支持的音色。", 400);
   }

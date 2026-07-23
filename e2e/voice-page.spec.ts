@@ -14,8 +14,8 @@ test("automatically creates a guest and renders all supported voices", async ({ 
   await expect(page.getByRole("button", { name: "开始对话" })).toBeVisible();
   await expect(page.getByText(/访客 [A-F0-9]{6}/)).toBeVisible();
   const voiceSelect = page.getByRole("combobox", { name: "选择音色" });
-  await expect(voiceSelect).toHaveValue("Tina");
-  await expect(voiceSelect.locator("option")).toHaveCount(8);
+  await expect(voiceSelect).toHaveValue("Theo Calm");
+  await expect(voiceSelect.locator("option")).toHaveCount(10);
   await voiceSelect.selectOption("Ethan");
   await expect(voiceSelect).toHaveValue("Ethan");
   await expect(page.getByText("准备就绪")).toBeVisible();

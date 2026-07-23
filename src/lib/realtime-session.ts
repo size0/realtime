@@ -7,7 +7,7 @@ export type QwenRealtimeModel = (typeof QWEN_REALTIME_MODELS)[number];
 export type QwenRegion = "cn-beijing" | "ap-southeast-1";
 
 export const DEFAULT_QWEN_REALTIME_MODEL: QwenRealtimeModel =
-  "qwen3.5-omni-plus-realtime";
+  "qwen3.5-omni-flash-realtime";
 
 export function isQwenRealtimeModel(value: string): value is QwenRealtimeModel {
   return QWEN_REALTIME_MODELS.some((model) => model === value);

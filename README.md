@@ -4,9 +4,9 @@
 
 ## 功能
 
-- 8 个 Qwen3.5 Realtime 声线（默认 Tina）、双向 WebRTC、实时字幕和插话打断
+- 10 个精选 Qwen3.5 Realtime 声线（默认予安 Theo Calm）、双向 WebRTC、实时字幕和插话打断
 - Semantic VAD，静音 1500ms 后才判断用户说完
-- GPT-5.5 负责回复内容，Qwen Realtime 负责听、断句和用 Tina 等音色朗读
+- GPT-5.5 负责回复内容，Qwen3.5-Omni-Flash-Realtime 负责听、断句和自然朗读
 - 管理员创建、启用或停用用户，并查看语音连接和模型回复次数
 - 普通用户首次访问自动生成访客账号；管理员和已有账号保留用户名密码登录
 - 访客创建频率限制及每日连接/回复额度，HttpOnly + SameSite=Strict 签名会话
@@ -25,7 +25,7 @@ Copy-Item .env.example .env.local
 DASHSCOPE_API_KEY=sk-your-real-key
 DASHSCOPE_WORKSPACE_ID=llm-your-workspace-id
 DASHSCOPE_REGION=cn-beijing
-DASHSCOPE_REALTIME_MODEL=qwen3.5-omni-plus-realtime
+DASHSCOPE_REALTIME_MODEL=qwen3.5-omni-flash-realtime
 
 REASONING_API_KEY=sk-your-reasoning-provider-key
 REASONING_BASE_URL=https://airelvo.cc/v1
