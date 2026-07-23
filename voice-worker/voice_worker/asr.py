@@ -14,8 +14,7 @@ class SenseVoiceAsr:
             model=model_name,
             device="cpu",
             disable_update=True,
-            disable_pbar=True,
-            trust_remote_code=True,
+            hub="ms",
         )
 
     def transcribe(self, pcm_s16le: bytes) -> str:
@@ -42,4 +41,3 @@ class SenseVoiceAsr:
         except (ImportError, AttributeError, TypeError, ValueError):
             text = SENSEVOICE_TAG.sub("", raw_text)
         return " ".join(text.split()).strip()
-

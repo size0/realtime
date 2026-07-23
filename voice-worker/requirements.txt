@@ -3,11 +3,12 @@ torch==2.7.1+cpu
 torchaudio==2.7.1+cpu
 fastapi>=0.115,<1
 uvicorn[standard]>=0.34,<1
-numpy>=1.26,<3
+numpy==1.26.4
 onnxruntime>=1.18,<2
-silero-vad>=6.0,<7
-funasr>=1.2.7,<2
+silero-vad==5.1
+funasr==1.1.6
 modelscope>=1.25,<2
+transformers==4.41.1
 dashscope>=1.24.4,<2
 websockets>=13,<16
 soundfile>=0.12,<1
