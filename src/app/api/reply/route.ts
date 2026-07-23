@@ -77,8 +77,11 @@ function readReplyRequest(value: unknown): ReplyRequestBody | null {
   return { question, history };
 }
 
-function createTextBaseUrl(workspaceId: string, region: QwenRegion): string | null {
-  const configured = process.env.DASHSCOPE_TEXT_BASE_URL?.trim();
+function createTextBaseUrl(workspaceId?: string, region?: QwenRegion): string | null {
+  const configured =
+    process.env.REASONING_BASE_URL?.trim() || process.env.DASHSCOPE_TEXT_BASE_URL?.trim();
+  if (!configured && (!workspaceId || !region)) return null;
+
   const base =
     configured ||
     (region === "ap-southeast-1"
@@ -120,24 +123,29 @@ async function requestCompletion(
   const last = history.at(-1);
   if (last?.role === "user" && last.content === body.question) history.pop();
 
+  const requestBody: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...history,
+      { role: "user", content: body.question },
+    ],
+    max_tokens: 1_200,
+    temperature: 0.65,
+    stream: false,
+  };
+
+  if (baseUrl.includes(".maas.aliyuncs.com/compatible-mode/")) {
+    requestBody.enable_thinking = false;
+  }
+
   const upstream = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...history,
-        { role: "user", content: body.question },
-      ],
-      max_tokens: 1_200,
-      temperature: 0.65,
-      enable_thinking: false,
-      stream: false,
-    }),
+    body: JSON.stringify(requestBody),
     signal,
     cache: "no-store",
   });
@@ -150,10 +158,13 @@ async function requestCompletion(
 
 function mapUpstreamError(status: number) {
   if (status === 401) {
-    return { code: "QWEN_AUTH", message: "百炼 API Key 无效。", status: 502 };
+    return { code: "REASONING_AUTH", message: "回答模型 API Key 无效。", status: 502 };
   }
   if (status === 403) {
-    return { code: "QWEN_ACCESS", message: "当前百炼账号无权调用回复模型。", status: 502 };
+    return { code: "REASONING_ACCESS", message: "当前账号无权调用回答模型。", status: 502 };
+  }
+  if (status === 404) {
+    return { code: "REASONING_MODEL_NOT_FOUND", message: "回答模型不存在或不可用。", status: 502 };
   }
   if (status === 429) {
     return { code: "REPLY_RATE_LIMITED", message: "回复模型当前请求过多，请稍后再试。", status: 429 };
@@ -196,31 +207,53 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const apiKey = process.env.DASHSCOPE_API_KEY;
+  const apiKey = process.env.REASONING_API_KEY?.trim() || process.env.DASHSCOPE_API_KEY?.trim();
   const workspaceId = process.env.DASHSCOPE_WORKSPACE_ID?.trim();
-  if (!apiKey) return errorResponse("MISSING_API_KEY", "服务端尚未配置百炼 API Key。", 503);
-  if (!workspaceId) {
-    return errorResponse("MISSING_WORKSPACE_ID", "服务端尚未配置百炼业务空间 ID。", 503);
-  }
-  if (!isValidWorkspaceId(workspaceId)) {
-    return errorResponse("INVALID_SERVER_CONFIG", "百炼业务空间 ID 格式无效。", 503);
-  }
+  if (!apiKey) return errorResponse("MISSING_API_KEY", "服务端尚未配置回答模型 API Key。", 503);
 
   const regionValue = process.env.DASHSCOPE_REGION?.trim() || "cn-beijing";
-  if (regionValue !== "cn-beijing" && regionValue !== "ap-southeast-1") {
-    return errorResponse("INVALID_SERVER_CONFIG", "百炼地域配置无效。", 503);
+  const hasConfiguredBaseUrl = Boolean(
+    process.env.REASONING_BASE_URL?.trim() || process.env.DASHSCOPE_TEXT_BASE_URL?.trim(),
+  );
+  let region: QwenRegion | undefined;
+  if (!hasConfiguredBaseUrl) {
+    if (!workspaceId) {
+      return errorResponse("MISSING_WORKSPACE_ID", "服务端尚未配置百炼业务空间 ID。", 503);
+    }
+    if (!isValidWorkspaceId(workspaceId)) {
+      return errorResponse("INVALID_SERVER_CONFIG", "百炼业务空间 ID 格式无效。", 503);
+    }
+    if (regionValue !== "cn-beijing" && regionValue !== "ap-southeast-1") {
+      return errorResponse("INVALID_SERVER_CONFIG", "百炼地域配置无效。", 503);
+    }
+    region = regionValue;
   }
 
-  const baseUrl = createTextBaseUrl(workspaceId, regionValue);
+  const baseUrl = createTextBaseUrl(workspaceId, region);
   if (!baseUrl) {
-    return errorResponse("INVALID_SERVER_CONFIG", "百炼文本模型地址配置无效。", 503);
+    return errorResponse("INVALID_SERVER_CONFIG", "回答模型地址配置无效。", 503);
   }
 
-  const primaryModel = process.env.DASHSCOPE_REASONING_MODEL?.trim() || DEFAULT_MODEL;
+  const hasDedicatedReasoningProvider = Boolean(
+    process.env.REASONING_API_KEY?.trim() ||
+      process.env.REASONING_BASE_URL?.trim() ||
+      process.env.REASONING_MODEL?.trim(),
+  );
+  const primaryModel =
+    process.env.REASONING_MODEL?.trim() ||
+    process.env.DASHSCOPE_REASONING_MODEL?.trim() ||
+    DEFAULT_MODEL;
   const fallbackModel =
-    process.env.DASHSCOPE_REASONING_FALLBACK_MODEL?.trim() || DEFAULT_FALLBACK_MODEL;
-  if (!MODEL_PATTERN.test(primaryModel) || !MODEL_PATTERN.test(fallbackModel)) {
-    return errorResponse("INVALID_SERVER_CONFIG", "百炼回复模型名称配置无效。", 503);
+    process.env.REASONING_FALLBACK_MODEL !== undefined
+      ? process.env.REASONING_FALLBACK_MODEL.trim()
+      : hasDedicatedReasoningProvider
+        ? ""
+        : process.env.DASHSCOPE_REASONING_FALLBACK_MODEL?.trim() || DEFAULT_FALLBACK_MODEL;
+  if (
+    !MODEL_PATTERN.test(primaryModel) ||
+    (fallbackModel.length > 0 && !MODEL_PATTERN.test(fallbackModel))
+  ) {
+    return errorResponse("INVALID_SERVER_CONFIG", "回答模型名称配置无效。", 503);
   }
 
   let parsedBody: ReplyRequestBody | null = null;
@@ -241,7 +274,7 @@ export async function POST(request: Request): Promise<Response> {
   const timeoutId = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
   try {
-    const models = [...new Set([primaryModel, fallbackModel])];
+    const models = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
     let lastStatus = 502;
     for (const model of models) {
       const result = await requestCompletion(baseUrl, apiKey, model, parsedBody, controller.signal);

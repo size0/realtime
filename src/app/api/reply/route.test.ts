@@ -29,8 +29,10 @@ function makeRequest(body: unknown = { question: "怎么自然地介绍自己？
 }
 
 function configure() {
-  process.env.DASHSCOPE_API_KEY = "sk-test-secret";
-  process.env.DASHSCOPE_WORKSPACE_ID = "llm-testworkspace";
+  process.env.REASONING_API_KEY = "sk-test-secret";
+  process.env.REASONING_BASE_URL = "https://api.reasoning.test/v1/";
+  process.env.REASONING_MODEL = "gpt-5.5";
+  process.env.REASONING_FALLBACK_MODEL = "gpt-5.4";
 }
 
 function completion(content: string) {
@@ -59,6 +61,10 @@ describe("POST /api/reply", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    delete process.env.REASONING_API_KEY;
+    delete process.env.REASONING_BASE_URL;
+    delete process.env.REASONING_MODEL;
+    delete process.env.REASONING_FALLBACK_MODEL;
     delete process.env.DASHSCOPE_API_KEY;
     delete process.env.DASHSCOPE_WORKSPACE_ID;
     delete process.env.DASHSCOPE_REASONING_MODEL;
@@ -81,7 +87,7 @@ describe("POST /api/reply", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("uses qwen3.7-max and returns only the generated reply", async () => {
+  it("uses the configured GPT-5.5 provider and returns only the generated reply", async () => {
     fetchMock.mockResolvedValue(completion("自然一点介绍就好。"));
     const response = await POST(makeRequest());
     const body = await response.text();
@@ -91,22 +97,46 @@ describe("POST /api/reply", () => {
     expect(authMocks.recordUsage).toHaveBeenCalledWith("user-test", "replies");
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe(
-      "https://llm-testworkspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
-    );
-    const requestBody = JSON.parse(String(init?.body)) as { model: string; enable_thinking: boolean };
-    expect(requestBody.model).toBe("qwen3.7-max");
-    expect(requestBody.enable_thinking).toBe(false);
+    expect(url).toBe("https://api.reasoning.test/v1/chat/completions");
+    const requestBody = JSON.parse(String(init?.body)) as {
+      model: string;
+      enable_thinking?: boolean;
+    };
+    expect(requestBody.model).toBe("gpt-5.5");
+    expect(requestBody.enable_thinking).toBeUndefined();
   });
 
-  it("falls back to qwen3.7-plus when Max is unavailable", async () => {
+  it("falls back to the configured secondary model when GPT-5.5 is unavailable", async () => {
     fetchMock
       .mockResolvedValueOnce(new Response("temporary", { status: 500 }))
       .mockResolvedValueOnce(completion("回退成功"));
     const response = await POST(makeRequest());
     expect(response.status).toBe(200);
     const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as { model: string };
-    expect(secondBody.model).toBe("qwen3.7-plus");
+    expect(secondBody.model).toBe("gpt-5.4");
+  });
+
+  it("keeps the legacy DashScope configuration as a backward-compatible fallback", async () => {
+    delete process.env.REASONING_API_KEY;
+    delete process.env.REASONING_BASE_URL;
+    delete process.env.REASONING_MODEL;
+    delete process.env.REASONING_FALLBACK_MODEL;
+    process.env.DASHSCOPE_API_KEY = "sk-dashscope-test";
+    process.env.DASHSCOPE_WORKSPACE_ID = "llm-testworkspace";
+    fetchMock.mockResolvedValue(completion("兼容成功"));
+
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe(
+      "https://llm-testworkspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+    );
+    const requestBody = JSON.parse(String(init?.body)) as {
+      model: string;
+      enable_thinking?: boolean;
+    };
+    expect(requestBody.model).toBe("qwen3.7-max");
+    expect(requestBody.enable_thinking).toBe(false);
   });
 
   it("maps authentication errors without exposing upstream details", async () => {
@@ -114,7 +144,7 @@ describe("POST /api/reply", () => {
     const response = await POST(makeRequest());
     const body = await response.text();
     expect(response.status).toBe(502);
-    expect(body).toContain("QWEN_AUTH");
+    expect(body).toContain("REASONING_AUTH");
     expect(body).not.toContain("secret upstream details");
     expect(body).not.toContain("sk-test-secret");
   });
