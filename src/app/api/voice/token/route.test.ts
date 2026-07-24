@@ -5,7 +5,8 @@ const authMocks = vi.hoisted(() => ({
   getRequestSession: vi.fn(),
   validCsrfToken: vi.fn(),
   recordUsage: vi.fn(),
-  usageAllowance: vi.fn(),
+  reserveVoiceSession: vi.fn(),
+  cancelVoiceReservation: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -14,20 +15,26 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 vi.mock("@/lib/auth-store", () => ({
   recordUsage: authMocks.recordUsage,
-  usageAllowance: authMocks.usageAllowance,
+  reserveVoiceSession: authMocks.reserveVoiceSession,
+  cancelVoiceReservation: authMocks.cancelVoiceReservation,
 }));
 
 import { POST } from "@/app/api/voice/token/route";
 
-function makeRequest(origin = "http://localhost:3000") {
+function makeRequest(
+  origin = "http://localhost:3000",
+  body: unknown = { companionVoice: "breeze" },
+) {
   return new Request("http://localhost:3000/api/voice/token", {
     method: "POST",
     headers: {
       Origin: origin,
       Host: "localhost:3000",
+      "Content-Type": "application/json",
       "X-CSRF-Token": "csrf-test",
       "X-Forwarded-For": "127.0.0.1",
     },
+    body: JSON.stringify(body),
   });
 }
 
@@ -42,12 +49,12 @@ describe("POST /api/voice/token", () => {
       csrfToken: "csrf-test",
     });
     authMocks.validCsrfToken.mockReturnValue(true);
-    authMocks.usageAllowance.mockReturnValue({
-      allowed: true,
-      limit: null,
-      used: 0,
+    authMocks.reserveVoiceSession.mockResolvedValue({
+      sessionId: "voice-session-123",
+      quotaSeconds: 180,
     });
     authMocks.recordUsage.mockResolvedValue(undefined);
+    authMocks.cancelVoiceReservation.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -69,6 +76,7 @@ describe("POST /api/voice/token", () => {
     expect(response.status).toBe(200);
     expect(payload.websocketPath).toBe("/voice-ws");
     expect(payload.token).toEqual(expect.any(String));
+    expect(payload.remainingSeconds).toBe(180);
     expect(JSON.stringify(payload)).not.toContain(process.env.VOICE_WORKER_SECRET);
     expect(authMocks.recordUsage).toHaveBeenCalledWith(
       "user-test",
@@ -76,15 +84,14 @@ describe("POST /api/voice/token", () => {
     );
   });
 
-  it("does not issue a token when daily allowance is exhausted", async () => {
-    authMocks.usageAllowance.mockReturnValueOnce({
-      allowed: false,
-      limit: 10,
-      used: 10,
-    });
+  it("does not issue a token when seconds are exhausted or voice is invalid", async () => {
+    authMocks.reserveVoiceSession.mockRejectedValueOnce(new Error("语音额度已用完。"));
     const response = await POST(makeRequest());
     expect(response.status).toBe(429);
     expect(authMocks.recordUsage).not.toHaveBeenCalled();
+    expect((await POST(makeRequest("http://localhost:3000", {
+      companionVoice: "unknown",
+    }))).status).toBe(400);
   });
 
   it("returns a safe configuration error without exposing secrets", async () => {

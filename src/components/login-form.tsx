@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
-import { AudioLines, LockKeyhole } from "lucide-react";
+import { LockKeyhole, MoonStar } from "lucide-react";
 
 export function LoginForm() {
   const [username, setUsername] = useState("");
@@ -31,9 +31,11 @@ export function LoginForm() {
             : "登录失败，请稍后重试。";
         throw new Error(message);
       }
-      window.location.assign("/");
+      window.location.assign("/admin");
     } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : "登录失败，请稍后重试。");
+      setErrorMessage(
+        error instanceof Error ? error.message : "登录失败，请稍后重试。",
+      );
       setSubmitting(false);
     }
   };
@@ -44,16 +46,13 @@ export function LoginForm() {
       <div className="grain" aria-hidden="true" />
       <section className="auth-card" aria-labelledby="login-title">
         <div className="auth-brand">
-          <span className="brand-mark"><AudioLines size={19} strokeWidth={2.2} /></span>
-          <div>
-            <strong>声场</strong>
-            <small>REALTIME VOICE</small>
-          </div>
+          <span className="brand-mark"><MoonStar size={19} /></span>
+          <div><strong>树洞后台</strong><small>ADMIN ACCESS</small></div>
         </div>
         <div className="auth-heading">
           <span className="eyebrow">SECURE ACCESS</span>
-          <h1 id="login-title">登录声场</h1>
-          <p>普通访客无需注册；此入口供管理员和已有账号使用。</p>
+          <h1 id="login-title">管理员登录</h1>
+          <p>这是隐藏的运营入口。普通用户会自动生成匿名账号，不会看到此页面。</p>
         </div>
         <form className="auth-form" onSubmit={submit}>
           <label>
@@ -87,8 +86,8 @@ export function LoginForm() {
             <span>{submitting ? "正在登录…" : "安全登录"}</span>
           </button>
         </form>
-        <Link className="auth-footnote auth-admin-link" href="/">免登录进入语音对话</Link>
-        <p className="auth-footnote">会话保存在加密签名的 HttpOnly Cookie 中</p>
+        <Link className="auth-footnote auth-admin-link" href="/">返回树洞</Link>
+        <p className="auth-footnote">登录会话保存在签名的 HttpOnly Cookie 中</p>
       </section>
     </main>
   );

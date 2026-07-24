@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { classifyReplyTier } from "@/lib/reply-routing";
+import {
+  classifyConversationRisk,
+  classifyReplyTier,
+} from "@/lib/reply-routing";
 
 describe("reply model routing", () => {
   it.each([
@@ -17,5 +20,10 @@ describe("reply model routing", () => {
   ])("routes complex or high-stakes questions to the strong tier: %s", (question) => {
     expect(classifyReplyTier(question, [])).toBe("strong");
   });
-});
 
+  it("routes risk independently from complexity", () => {
+    expect(classifyConversationRisk("我最近有点孤独")).toBe("normal");
+    expect(classifyConversationRisk("我不想活了")).toBe("elevated");
+    expect(classifyConversationRisk("我今晚准备吞药自杀")).toBe("crisis");
+  });
+});

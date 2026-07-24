@@ -8,15 +8,6 @@ from typing import Literal
 
 MAX_JSON_BYTES = 8 * 1024
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-SUPPORTED_VOICES = {"Cherry"}
-
-
-@dataclass(frozen=True)
-class ConfigureEvent:
-    type: Literal["configure"]
-    voice: str
-
-
 @dataclass(frozen=True)
 class SynthesizeEvent:
     type: Literal["synthesize"]
@@ -30,7 +21,7 @@ class ControlEvent:
     type: Literal["cancel", "stop"]
 
 
-ClientEvent = ConfigureEvent | SynthesizeEvent | ControlEvent
+ClientEvent = SynthesizeEvent | ControlEvent
 
 
 class ProtocolError(ValueError):
@@ -48,12 +39,6 @@ def parse_client_event(raw: str, max_tts_text_chars: int = 600) -> ClientEvent:
         raise ProtocolError("控制消息缺少类型。")
 
     event_type = payload["type"]
-    if event_type == "configure":
-        voice = payload.get("voice")
-        if not isinstance(voice, str) or voice not in SUPPORTED_VOICES:
-            raise ProtocolError("不支持该音色。")
-        return ConfigureEvent(type="configure", voice=voice)
-
     if event_type == "synthesize":
         response_id = payload.get("responseId")
         segment_id = payload.get("segmentId")
@@ -93,4 +78,3 @@ def safe_error(
     return server_event(
         "error", code=code, message=message, recoverable=recoverable
     )
-

@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from .asr import SenseVoiceAsr
-from .auth import NonceCache, verify_voice_token
+from .auth import NonceCache, VoiceToken, verify_voice_token
 from .config import Settings
 from .protocol import (
-    ConfigureEvent,
     ControlEvent,
     ProtocolError,
     SynthesizeEvent,
@@ -22,7 +23,8 @@ from .protocol import (
     safe_error,
     server_event,
 )
-from .tts import QwenRealtimeTtsProvider, TtsOutput, TtsRequest
+from .tts import QwenRealtimeTtsProvider, TtsRequest
+from .usage import report_voice_usage
 from .vad import SileroVadEngine, SpeechStarted, SpeechStopped
 
 logging.basicConfig(
@@ -30,6 +32,28 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("voice-worker")
+
+
+@dataclass(frozen=True)
+class CompanionTts:
+    provider_voice: str
+    instructions: str
+
+
+COMPANION_TTS: dict[str, CompanionTts] = {
+    "breeze": CompanionTts(
+        provider_voice="Serena",
+        instructions="语气轻柔、真诚、慢一点，像深夜里安静陪伴的朋友。停顿自然，不要播音腔。",
+    ),
+    "glow": CompanionTts(
+        provider_voice="Cherry",
+        instructions="语气自然亲近、稍微明亮，像熟悉的朋友聊天。节奏松弛，不要客服腔。",
+    ),
+    "nightwatch": CompanionTts(
+        provider_voice="Ethan",
+        instructions="语气温暖沉稳、克制可靠，速度稍慢。避免说教，给对方留出呼吸感。",
+    ),
+}
 
 
 class ModelRegistry:
@@ -88,19 +112,23 @@ class VoiceConnection:
         self,
         websocket: WebSocket,
         registry: ModelRegistry,
-        subject: str,
+        token: VoiceToken,
     ) -> None:
         self.websocket = websocket
         self.registry = registry
         self.settings = registry.settings
-        self.subject = subject
-        self.session_id = uuid.uuid4().hex
+        self.token = token
+        self.subject = token.subject
+        self.session_id = token.session_id
+        self.quota_seconds = min(token.quota_seconds, self.settings.max_session_seconds)
         self.send_lock = asyncio.Lock()
         self.asr_tasks: set[asyncio.Task[None]] = set()
+        companion = COMPANION_TTS[token.companion_voice]
         self.tts = QwenRealtimeTtsProvider(
             api_key=self.settings.dashscope_api_key,
             model=self.settings.tts_model,
-            voice=self.settings.tts_voice,
+            voice=companion.provider_voice,
+            instructions=companion.instructions,
             websocket_url=self.settings.tts_ws_url,
             loop=asyncio.get_running_loop(),
         )
@@ -109,17 +137,25 @@ class VoiceConnection:
         self.turn_detector = registry.vad.create_session()
 
     async def run(self) -> None:
+        started = time.monotonic()
         forwarder = asyncio.create_task(self._forward_tts())
+        warning = asyncio.create_task(self._quota_warning())
         await self._send_json(
             server_event(
                 "ready",
                 inputSampleRate=16_000,
                 outputSampleRate=24_000,
+                remainingSeconds=self.quota_seconds,
             )
         )
-        logger.info("event=session_started session=%s", self.session_id)
+        logger.info(
+            "event=session_started session=%s voice=%s quota=%d",
+            self.session_id,
+            self.token.companion_voice,
+            self.quota_seconds,
+        )
         try:
-            async with asyncio.timeout(self.settings.max_session_seconds):
+            async with asyncio.timeout(self.quota_seconds):
                 while True:
                     message = await self.websocket.receive()
                     if message.get("type") == "websocket.disconnect":
@@ -128,28 +164,45 @@ class VoiceConnection:
                     text = message.get("text")
                     if isinstance(audio, bytes):
                         await self._handle_audio(audio)
-                    elif isinstance(text, str):
-                        if await self._handle_text(text):
-                            break
+                    elif isinstance(text, str) and await self._handle_text(text):
+                        break
         except TimeoutError:
-            await self._send_json(
-                safe_error(
-                    "SESSION_EXPIRED",
-                    "本次语音会话已达到 30 分钟，请重新连接。",
-                    recoverable=True,
-                )
-            )
+            await self._send_json(server_event("quota_exhausted", remainingSeconds=0))
         except WebSocketDisconnect:
             pass
         finally:
+            warning.cancel()
             forwarder.cancel()
+            await asyncio.gather(warning, forwarder, return_exceptions=True)
             await self.tts.close()
             self.turn_detector.reset()
             for task in self.asr_tasks:
                 task.cancel()
             if self.asr_tasks:
                 await asyncio.gather(*self.asr_tasks, return_exceptions=True)
-            logger.info("event=session_finished session=%s", self.session_id)
+            used_seconds = min(
+                self.quota_seconds,
+                max(1, math.ceil(time.monotonic() - started)),
+            )
+            reported = await asyncio.to_thread(
+                report_voice_usage,
+                self.settings.usage_report_url,
+                self.settings.worker_secret,
+                self.subject,
+                self.session_id,
+                used_seconds,
+            )
+            logger.info(
+                "event=session_finished session=%s used_seconds=%d usage_reported=%s",
+                self.session_id,
+                used_seconds,
+                reported,
+            )
+
+    async def _quota_warning(self) -> None:
+        if self.quota_seconds > 20:
+            await asyncio.sleep(self.quota_seconds - 20)
+        await self._send_json(server_event("quota_warning", remainingSeconds=min(20, self.quota_seconds)))
 
     async def _handle_audio(self, audio: bytes) -> None:
         if (
@@ -157,9 +210,7 @@ class VoiceConnection:
             or len(audio) % 2 != 0
             or len(audio) > self.settings.max_audio_chunk_bytes
         ):
-            await self._send_json(
-                safe_error("INVALID_AUDIO", "收到的麦克风音频格式无效。")
-            )
+            await self._send_json(safe_error("INVALID_AUDIO", "麦克风音频格式无效。"))
             return
 
         for event in self.turn_detector.feed(audio):
@@ -172,9 +223,7 @@ class VoiceConnection:
                 await self._send_json(
                     server_event("speech_stopped", utteranceId=utterance_id)
                 )
-                task = asyncio.create_task(
-                    self._transcribe(utterance_id, event.audio)
-                )
+                task = asyncio.create_task(self._transcribe(utterance_id, event.audio))
                 self.asr_tasks.add(task)
                 task.add_done_callback(self.asr_tasks.discard)
 
@@ -186,14 +235,10 @@ class VoiceConnection:
         try:
             text = await asyncio.to_thread(asr.transcribe, audio)
             if not text:
-                await self._send_json(
-                    safe_error("ASR_EMPTY", "这句话没有听清，请再说一次。")
-                )
+                await self._send_json(safe_error("ASR_EMPTY", "这句话没有听清，请再说一次。"))
                 return
             await self._send_json(
-                server_event(
-                    "transcript", utteranceId=utterance_id, text=text
-                )
+                server_event("transcript", utteranceId=utterance_id, text=text)
             )
             logger.info(
                 "event=asr_done session=%s elapsed_ms=%d",
@@ -204,9 +249,7 @@ class VoiceConnection:
             raise
         except Exception:
             logger.exception("event=asr_failed session=%s", self.session_id)
-            await self._send_json(
-                safe_error("ASR_FAILED", "本地语音识别暂时失败，请再试一次。")
-            )
+            await self._send_json(safe_error("ASR_FAILED", "语音识别暂时失败，请再试一次。"))
 
     async def _handle_text(self, raw: str) -> bool:
         try:
@@ -215,8 +258,6 @@ class VoiceConnection:
             await self._send_json(safe_error("INVALID_CONTROL", str(exc)))
             return False
 
-        if isinstance(event, ConfigureEvent):
-            return False
         if isinstance(event, ControlEvent):
             if event.type == "cancel":
                 await self.tts.cancel()
@@ -240,9 +281,7 @@ class VoiceConnection:
                 await self.tts.synthesize(request)
             except Exception:
                 logger.exception("event=tts_start_failed session=%s", self.session_id)
-                await self._send_json(
-                    safe_error("TTS_FAILED", "音色服务暂时不可用，请稍后重试。")
-                )
+                await self._send_json(safe_error("TTS_FAILED", "声音服务暂时不可用，请稍后重试。"))
         return False
 
     async def _forward_tts(self) -> None:
@@ -259,9 +298,7 @@ class VoiceConnection:
                     )
                 )
             else:
-                await self._send_json(
-                    safe_error("TTS_FAILED", "音色服务生成失败，请稍后重试。")
-                )
+                await self._send_json(safe_error("TTS_FAILED", "声音生成失败，请稍后重试。"))
 
     async def _send_json(self, payload: dict[str, object]) -> None:
         async with self.send_lock:
@@ -307,9 +344,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
         origin = websocket.headers.get("origin", "").rstrip("/")
-        token_value = websocket.query_params.get("token", "")
         token = verify_voice_token(
-            token_value, resolved_settings.worker_secret
+            websocket.query_params.get("token", ""),
+            resolved_settings.worker_secret,
         )
         if origin != resolved_settings.app_origin or token is None:
             await websocket.close(code=1008)
@@ -321,21 +358,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await websocket.accept()
         if not registry.ready:
             await websocket.send_json(
-                safe_error(
-                    "WORKER_WARMING_UP",
-                    "低成本语音模型正在预热，请稍后重试或切换高保真模式。",
-                    recoverable=True,
-                )
+                safe_error("WORKER_WARMING_UP", "语音服务正在预热，请稍后重试。", recoverable=True)
             )
             await websocket.close(code=1013)
             return
         if not resolved_settings.dashscope_api_key:
             await websocket.send_json(
-                safe_error(
-                    "TTS_NOT_CONFIGURED",
-                    "固定音色服务尚未配置，请切换高保真模式。",
-                    recoverable=True,
-                )
+                safe_error("TTS_NOT_CONFIGURED", "声音服务尚未配置。", recoverable=True)
             )
             await websocket.close(code=1011)
             return
@@ -343,18 +372,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with active_lock:
             if token.subject in active_subjects:
                 await websocket.send_json(
-                    safe_error(
-                        "SESSION_ALREADY_ACTIVE",
-                        "该账号已有语音会话，请先结束另一端通话。",
-                    )
+                    safe_error("SESSION_ALREADY_ACTIVE", "这个账号已有一段通话正在进行。")
                 )
                 await websocket.close(code=1008)
                 return
             active_subjects.add(token.subject)
 
         try:
-            connection = VoiceConnection(websocket, registry, token.subject)
-            await connection.run()
+            await VoiceConnection(websocket, registry, token).run()
         finally:
             async with active_lock:
                 active_subjects.discard(token.subject)
@@ -363,4 +388,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
-

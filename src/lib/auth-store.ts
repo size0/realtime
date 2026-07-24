@@ -1,40 +1,51 @@
-import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  createHmac,
+  randomBytes,
+  randomUUID,
+  scrypt as scryptCallback,
+  timingSafeEqual,
+} from "node:crypto";
 import { promisify } from "node:util";
+import type Database from "better-sqlite3";
+import { database, resetDatabaseForTests } from "@/lib/database";
+import { getProductSettings } from "@/lib/product-admin";
 
 const scrypt = promisify(scryptCallback);
-const STORE_VERSION = 1;
 const USERNAME_PATTERN = /^[A-Za-z0-9_.-]{3,32}$/;
 const MIN_PASSWORD_LENGTH = 10;
 const MAX_PASSWORD_LENGTH = 128;
 
 export type UserRole = "admin" | "user";
-export type AccountType = "managed" | "guest";
+export type AccountType = "managed" | "guest" | "wechat";
 export type UsageKind = "realtimeConnections" | "replies";
 
 export interface DailyUsage extends Record<UsageKind, number> {
   date: string;
 }
 
-interface StoredUser {
-  id: string;
-  username: string;
-  displayName: string;
-  passwordHash: string;
-  passwordSalt: string;
-  role: UserRole;
-  accountType?: AccountType;
-  enabled: boolean;
-  createdAt: number;
-  updatedAt: number;
-  lastLoginAt?: number;
-  usage: Record<UsageKind, number>;
-  dailyUsage?: DailyUsage;
+export interface VoiceAllowance {
+  limitSeconds: number | null;
+  usedSeconds: number;
+  remainingSeconds: number | null;
 }
 
-interface UserDatabase {
-  version: typeof STORE_VERSION;
-  users: StoredUser[];
+interface UserRow {
+  id: string;
+  username: string;
+  display_name: string;
+  password_hash: string;
+  password_salt: string;
+  role: UserRole;
+  account_type: AccountType;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
+  last_login_at: number | null;
+  usage_realtime_connections: number;
+  usage_replies: number;
+  daily_usage_date: string;
+  daily_realtime_connections: number;
+  daily_replies: number;
 }
 
 export interface PublicUser {
@@ -59,8 +70,7 @@ export class AuthStoreError extends Error {
       | "INVALID_DISPLAY_NAME"
       | "USER_EXISTS"
       | "USER_NOT_FOUND"
-      | "MISSING_ADMIN_PASSWORD"
-      | "CORRUPT_STORE",
+      | "MISSING_ADMIN_PASSWORD",
     message: string,
   ) {
     super(message);
@@ -69,10 +79,16 @@ export class AuthStoreError extends Error {
 }
 
 let operationQueue: Promise<void> = Promise.resolve();
+let adminBootstrap: Promise<void> | null = null;
 
-function storePath(): string {
-  const configured = process.env.APP_DATA_FILE?.trim();
-  return configured || ".data/users.json";
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  const result = operationQueue.then(operation, operation);
+  operationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function chinaDateKey(now = Date.now()): string {
+  return new Date(now + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function normalizeUsername(username: string): string {
@@ -104,79 +120,17 @@ function validateDisplayName(displayName: string): string {
   return normalized;
 }
 
-function chinaDateKey(now = Date.now()): string {
-  return new Date(now + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
-
-function dailyUsageFor(user: Pick<StoredUser, "dailyUsage">, now = Date.now()): DailyUsage {
-  const date = chinaDateKey(now);
-  return user.dailyUsage?.date === date
-    ? { ...user.dailyUsage }
-    : { date, realtimeConnections: 0, replies: 0 };
-}
-
-function isDailyUsage(value: unknown): value is DailyUsage {
-  if (typeof value !== "object" || value === null) return false;
-  const usage = value as Record<string, unknown>;
-  return (
-    typeof usage.date === "string" &&
-    typeof usage.realtimeConnections === "number" &&
-    typeof usage.replies === "number"
-  );
-}
-
-function isStoredUser(value: unknown): value is StoredUser {
-  if (typeof value !== "object" || value === null) return false;
-  const user = value as Record<string, unknown>;
-  const usage = user.usage;
-  return (
-    typeof user.id === "string" &&
-    typeof user.username === "string" &&
-    typeof user.displayName === "string" &&
-    typeof user.passwordHash === "string" &&
-    typeof user.passwordSalt === "string" &&
-    (user.role === "admin" || user.role === "user") &&
-    (user.accountType === undefined ||
-      user.accountType === "managed" ||
-      user.accountType === "guest") &&
-    typeof user.enabled === "boolean" &&
-    typeof user.createdAt === "number" &&
-    typeof user.updatedAt === "number" &&
-    typeof usage === "object" &&
-    usage !== null &&
-    typeof (usage as Record<string, unknown>).realtimeConnections === "number" &&
-    typeof (usage as Record<string, unknown>).replies === "number" &&
-    (user.dailyUsage === undefined || isDailyUsage(user.dailyUsage))
-  );
-}
-
-function publicUser(user: StoredUser): PublicUser {
-  return {
-    id: user.id,
-    username: user.username,
-    displayName: user.displayName,
-    role: user.role,
-    accountType: user.accountType ?? "managed",
-    enabled: user.enabled,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-    lastLoginAt: user.lastLoginAt,
-    usage: { ...user.usage },
-    dailyUsage: dailyUsageFor(user),
-  };
-}
-
 async function passwordDigest(password: string, salt: string): Promise<Buffer> {
   return (await scrypt(password, salt, 64)) as Buffer;
 }
 
-async function createStoredUser(input: {
+async function newUser(input: {
   username: string;
   displayName: string;
   password: string;
   role: UserRole;
-  accountType?: AccountType;
-}): Promise<StoredUser> {
+  accountType: AccountType;
+}): Promise<UserRow> {
   const username = validateUsername(input.username);
   const displayName = validateDisplayName(input.displayName);
   validatePassword(input.password);
@@ -186,95 +140,99 @@ async function createStoredUser(input: {
   return {
     id: randomUUID(),
     username,
-    displayName,
-    passwordHash,
-    passwordSalt,
+    display_name: displayName,
+    password_hash: passwordHash,
+    password_salt: passwordSalt,
     role: input.role,
-    accountType: input.accountType ?? "managed",
-    enabled: true,
-    createdAt: now,
-    updatedAt: now,
-    usage: { realtimeConnections: 0, replies: 0 },
-    dailyUsage: dailyUsageFor({}),
+    account_type: input.accountType,
+    enabled: 1,
+    created_at: now,
+    updated_at: now,
+    last_login_at: null,
+    usage_realtime_connections: 0,
+    usage_replies: 0,
+    daily_usage_date: chinaDateKey(now),
+    daily_realtime_connections: 0,
+    daily_replies: 0,
   };
 }
 
-async function bootstrapDatabase(): Promise<UserDatabase> {
-  const password = process.env.ADMIN_PASSWORD;
-  if (!password) {
-    throw new AuthStoreError(
-      "MISSING_ADMIN_PASSWORD",
-      "首次启动前必须配置 ADMIN_PASSWORD。",
-    );
-  }
-
-  const username = process.env.ADMIN_USERNAME?.trim() || "admin";
-  const displayName = process.env.ADMIN_DISPLAY_NAME?.trim() || "管理员";
-  const admin = await createStoredUser({
-    username,
-    displayName,
-    password,
-    role: "admin",
-    accountType: "managed",
-  });
-  return { version: STORE_VERSION, users: [admin] };
+function insertUser(db: Database.Database, row: UserRow): void {
+  db.prepare(`
+    INSERT INTO users (
+      id, username, display_name, password_hash, password_salt, role,
+      account_type, enabled, created_at, updated_at, last_login_at,
+      usage_realtime_connections, usage_replies, daily_usage_date,
+      daily_realtime_connections, daily_replies
+    ) VALUES (
+      @id, @username, @display_name, @password_hash, @password_salt, @role,
+      @account_type, @enabled, @created_at, @updated_at, @last_login_at,
+      @usage_realtime_connections, @usage_replies, @daily_usage_date,
+      @daily_realtime_connections, @daily_replies
+    )
+  `).run(row);
 }
 
-async function readDatabaseUnlocked(): Promise<{ database: UserDatabase; isNew: boolean }> {
+function publicUser(row: UserRow): PublicUser {
+  const today = chinaDateKey();
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name,
+    role: row.role,
+    accountType: row.account_type,
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.last_login_at ? { lastLoginAt: row.last_login_at } : {}),
+    usage: {
+      realtimeConnections: row.usage_realtime_connections,
+      replies: row.usage_replies,
+    },
+    dailyUsage: row.daily_usage_date === today
+      ? {
+          date: today,
+          realtimeConnections: row.daily_realtime_connections,
+          replies: row.daily_replies,
+        }
+      : { date: today, realtimeConnections: 0, replies: 0 },
+  };
+}
+
+async function ensureAdmin(): Promise<void> {
+  if (adminBootstrap) return adminBootstrap;
+  adminBootstrap = (async () => {
+    const db = database();
+    const count = db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number };
+    if (count.count > 0) return;
+    const password = process.env.ADMIN_PASSWORD;
+    if (!password) {
+      throw new AuthStoreError(
+        "MISSING_ADMIN_PASSWORD",
+        "首次启动前必须配置 ADMIN_PASSWORD。",
+      );
+    }
+    const row = await newUser({
+      username: process.env.ADMIN_USERNAME?.trim() || "admin",
+      displayName: process.env.ADMIN_DISPLAY_NAME?.trim() || "管理员",
+      password,
+      role: "admin",
+      accountType: "managed",
+    });
+    insertUser(db, row);
+  })();
   try {
-    const raw = await readFile(/*turbopackIgnore: true*/ storePath(), "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      (parsed as Record<string, unknown>).version !== STORE_VERSION ||
-      !Array.isArray((parsed as Record<string, unknown>).users)
-    ) {
-      throw new AuthStoreError("CORRUPT_STORE", "用户数据库格式无效。");
-    }
-    const users = (parsed as { users: unknown[] }).users;
-    if (!users.every(isStoredUser)) {
-      throw new AuthStoreError("CORRUPT_STORE", "用户数据库内容无效。");
-    }
-    return { database: { version: STORE_VERSION, users }, isNew: false };
-  } catch (error: unknown) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return { database: await bootstrapDatabase(), isNew: true };
-    }
+    await adminBootstrap;
+  } catch (error) {
+    adminBootstrap = null;
     throw error;
   }
 }
 
-async function writeDatabaseUnlocked(database: UserDatabase): Promise<void> {
-  const target = storePath();
-  const separatorIndex = Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\"));
-  const directory = separatorIndex >= 0 ? target.slice(0, separatorIndex) : ".";
-  await mkdir(/*turbopackIgnore: true*/ directory, { recursive: true, mode: 0o700 });
-  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(/*turbopackIgnore: true*/ temporary, JSON.stringify(database, null, 2), {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await rename(/*turbopackIgnore: true*/ temporary, target);
-}
-
-function serialized<T>(operation: () => Promise<T>): Promise<T> {
-  const result = operationQueue.then(operation, operation);
-  operationQueue = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
-
-async function loadDatabase(): Promise<UserDatabase> {
-  const loaded = await readDatabaseUnlocked();
-  if (loaded.isNew) await writeDatabaseUnlocked(loaded.database);
-  return loaded.database;
+function getRow(id: string): UserRow | undefined {
+  return database().prepare("SELECT * FROM users WHERE id = ?").get(id) as
+    | UserRow
+    | undefined;
 }
 
 export async function authenticateUser(
@@ -282,36 +240,36 @@ export async function authenticateUser(
   password: string,
 ): Promise<PublicUser | null> {
   return serialized(async () => {
-    const username = normalizeUsername(usernameInput);
-    const database = await loadDatabase();
-    const user = database.users.find((candidate) => candidate.username === username);
-    if (!user || !user.enabled) return null;
-
-    const actual = await passwordDigest(password, user.passwordSalt);
-    const expected = Buffer.from(user.passwordHash, "hex");
+    await ensureAdmin();
+    const db = database();
+    const row = db.prepare("SELECT * FROM users WHERE username = ? COLLATE NOCASE")
+      .get(normalizeUsername(usernameInput)) as UserRow | undefined;
+    if (!row || row.enabled !== 1) return null;
+    const actual = await passwordDigest(password, row.password_salt);
+    const expected = Buffer.from(row.password_hash, "hex");
     if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
-
-    user.lastLoginAt = Date.now();
-    user.updatedAt = user.lastLoginAt;
-    await writeDatabaseUnlocked(database);
-    return publicUser(user);
+    const now = Date.now();
+    db.prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?")
+      .run(now, now, row.id);
+    return publicUser({ ...row, last_login_at: now, updated_at: now });
   });
 }
 
 export async function getUserById(id: string): Promise<PublicUser | null> {
   return serialized(async () => {
-    const database = await loadDatabase();
-    const user = database.users.find((candidate) => candidate.id === id);
-    return user ? publicUser(user) : null;
+    await ensureAdmin();
+    const row = getRow(id);
+    return row ? publicUser(row) : null;
   });
 }
 
 export async function listUsers(): Promise<PublicUser[]> {
   return serialized(async () => {
-    const database = await loadDatabase();
-    return database.users
-      .map(publicUser)
-      .sort((left, right) => Number(right.role === "admin") - Number(left.role === "admin") || left.createdAt - right.createdAt);
+    await ensureAdmin();
+    const rows = database().prepare(
+      "SELECT * FROM users ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, created_at",
+    ).all() as UserRow[];
+    return rows.map(publicUser);
   });
 }
 
@@ -322,51 +280,131 @@ export async function createUser(input: {
   role?: UserRole;
 }): Promise<PublicUser> {
   return serialized(async () => {
-    const database = await loadDatabase();
+    await ensureAdmin();
+    const db = database();
     const username = validateUsername(input.username);
-    if (database.users.some((user) => user.username === username)) {
+    if (db.prepare("SELECT 1 FROM users WHERE username = ? COLLATE NOCASE").get(username)) {
       throw new AuthStoreError("USER_EXISTS", "该用户名已存在。");
     }
-
-    const user = await createStoredUser({
+    const row = await newUser({
       username,
       displayName: input.displayName,
       password: input.password,
       role: input.role ?? "user",
       accountType: "managed",
     });
-    database.users.push(user);
-    await writeDatabaseUnlocked(database);
-    return publicUser(user);
+    insertUser(db, row);
+    return publicUser(row);
   });
 }
 
 export async function createGuestUser(): Promise<PublicUser> {
   return serialized(async () => {
-    const database = await loadDatabase();
+    await ensureAdmin();
+    const db = database();
     let username = "";
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const candidate = `guest_${randomBytes(5).toString("hex")}`;
-      if (!database.users.some((user) => user.username === candidate)) {
+      if (!db.prepare("SELECT 1 FROM users WHERE username = ?").get(candidate)) {
         username = candidate;
         break;
       }
     }
     if (!username) throw new AuthStoreError("USER_EXISTS", "暂时无法生成访客账号。");
-
-    const suffix = username.slice(-6).toUpperCase();
-    const user = await createStoredUser({
+    const suffix = username.slice(-4).toUpperCase();
+    const row = await newUser({
       username,
-      displayName: `访客 ${suffix}`,
+      displayName: `树洞旅人 ${suffix}`,
       password: randomBytes(32).toString("base64url"),
       role: "user",
       accountType: "guest",
     });
-    user.lastLoginAt = Date.now();
-    user.updatedAt = user.lastLoginAt;
-    database.users.push(user);
-    await writeDatabaseUnlocked(database);
-    return publicUser(user);
+    row.last_login_at = Date.now();
+    row.updated_at = row.last_login_at;
+    insertUser(db, row);
+    return publicUser(row);
+  });
+}
+
+function identitySecret(): string {
+  const secret =
+    process.env.OAUTH_IDENTITY_SECRET?.trim() ||
+    process.env.SESSION_SECRET?.trim();
+  if (!secret || secret.length < 32) {
+    throw new Error("OAUTH_IDENTITY_SECRET must contain at least 32 characters.");
+  }
+  return secret;
+}
+
+function identityHash(openId: string): string {
+  return createHmac("sha256", identitySecret()).update(openId).digest("hex");
+}
+
+export async function upgradeGuestToWechat(
+  guestUserId: string | null,
+  openId: string,
+): Promise<PublicUser> {
+  return serialized(async () => {
+    await ensureAdmin();
+    const db = database();
+    const fingerprint = identityHash(openId);
+    const existing = db.prepare(`
+      SELECT users.* FROM oauth_identities
+      JOIN users ON users.id = oauth_identities.user_id
+      WHERE oauth_identities.provider = 'wechat_official' AND subject_hash = ?
+    `).get(fingerprint) as UserRow | undefined;
+    const now = Date.now();
+    if (existing) {
+      if (guestUserId && guestUserId !== existing.id) {
+        const merge = db.transaction(() => {
+          db.prepare("UPDATE conversations SET user_id = ? WHERE user_id = ?")
+            .run(existing.id, guestUserId);
+          db.prepare("UPDATE voice_sessions SET user_id = ? WHERE user_id = ?")
+            .run(existing.id, guestUserId);
+          db.prepare("UPDATE users SET enabled = 0, updated_at = ? WHERE id = ? AND account_type = 'guest'")
+            .run(now, guestUserId);
+        });
+        merge();
+      }
+      db.prepare("UPDATE oauth_identities SET last_login_at = ? WHERE provider = 'wechat_official' AND subject_hash = ?")
+        .run(now, fingerprint);
+      db.prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?")
+        .run(now, now, existing.id);
+      return publicUser({ ...existing, last_login_at: now, updated_at: now });
+    }
+
+    let row = guestUserId ? getRow(guestUserId) : undefined;
+    if (!row || row.account_type !== "guest") {
+      row = await newUser({
+        username: `wechat_${fingerprint.slice(0, 10)}`,
+        displayName: `树洞旅人 ${randomBytes(2).readUInt16BE().toString().padStart(5, "0")}`,
+        password: randomBytes(32).toString("base64url"),
+        role: "user",
+        accountType: "wechat",
+      });
+      row.last_login_at = now;
+      insertUser(db, row);
+    } else {
+      const username = `wechat_${fingerprint.slice(0, 10)}`;
+      const displayName = `树洞旅人 ${randomBytes(2).readUInt16BE().toString().padStart(5, "0")}`;
+      db.prepare(`
+        UPDATE users SET username = ?, display_name = ?, account_type = 'wechat',
+          last_login_at = ?, updated_at = ? WHERE id = ?
+      `).run(username, displayName, now, now, row.id);
+      row = {
+        ...row,
+        username,
+        display_name: displayName,
+        account_type: "wechat",
+        last_login_at: now,
+        updated_at: now,
+      };
+    }
+    db.prepare(`
+      INSERT INTO oauth_identities(provider, subject_hash, user_id, created_at, last_login_at)
+      VALUES('wechat_official', ?, ?, ?, ?)
+    `).run(fingerprint, row.id, now, now);
+    return publicUser(row);
   });
 }
 
@@ -394,30 +432,132 @@ export function usageAllowance(
 
 export async function setUserEnabled(id: string, enabled: boolean): Promise<PublicUser> {
   return serialized(async () => {
-    const database = await loadDatabase();
-    const user = database.users.find((candidate) => candidate.id === id);
-    if (!user) throw new AuthStoreError("USER_NOT_FOUND", "用户不存在。");
-    user.enabled = enabled;
-    user.updatedAt = Date.now();
-    await writeDatabaseUnlocked(database);
-    return publicUser(user);
+    await ensureAdmin();
+    const db = database();
+    const result = db.prepare("UPDATE users SET enabled = ?, updated_at = ? WHERE id = ?")
+      .run(enabled ? 1 : 0, Date.now(), id);
+    if (result.changes === 0) throw new AuthStoreError("USER_NOT_FOUND", "用户不存在。");
+    return publicUser(getRow(id)!);
   });
 }
 
 export async function recordUsage(id: string, kind: UsageKind): Promise<void> {
   return serialized(async () => {
-    const database = await loadDatabase();
-    const user = database.users.find((candidate) => candidate.id === id);
-    if (!user || !user.enabled) return;
-    const now = Date.now();
-    user.usage[kind] += 1;
-    user.dailyUsage = dailyUsageFor(user, now);
-    user.dailyUsage[kind] += 1;
-    user.updatedAt = now;
-    await writeDatabaseUnlocked(database);
+    await ensureAdmin();
+    const db = database();
+    const row = getRow(id);
+    if (!row || row.enabled !== 1) return;
+    const today = chinaDateKey();
+    const dailyColumn =
+      kind === "realtimeConnections" ? "daily_realtime_connections" : "daily_replies";
+    const totalColumn =
+      kind === "realtimeConnections" ? "usage_realtime_connections" : "usage_replies";
+    if (row.daily_usage_date !== today) {
+      db.prepare(`
+        UPDATE users SET daily_usage_date = ?, daily_realtime_connections = 0,
+          daily_replies = 0 WHERE id = ?
+      `).run(today, id);
+    }
+    db.prepare(`
+      UPDATE users SET ${totalColumn} = ${totalColumn} + 1,
+        ${dailyColumn} = ${dailyColumn} + 1, updated_at = ? WHERE id = ?
+    `).run(Date.now(), id);
   });
+}
+
+function quotaLimit(user: PublicUser): number | null {
+  if (user.role === "admin") return null;
+  const settings = getProductSettings();
+  const key = user.accountType === "guest" ? "GUEST_TRIAL_SECONDS" : "WECHAT_DAILY_SECONDS";
+  const fallback = user.accountType === "guest"
+    ? settings.guestTrialSeconds
+    : settings.wechatDailySeconds;
+  const value = Number(process.env[key]);
+  return Number.isInteger(value) && value > 0 && value <= 86_400 ? value : fallback;
+}
+
+export async function voiceSecondsAllowance(
+  userId: string,
+  now = Date.now(),
+): Promise<VoiceAllowance> {
+  await ensureAdmin();
+  const user = getRow(userId);
+  if (!user) throw new AuthStoreError("USER_NOT_FOUND", "用户不存在。");
+  const publicValue = publicUser(user);
+  const limitSeconds = quotaLimit(publicValue);
+  if (limitSeconds === null) {
+    return { limitSeconds: null, usedSeconds: 0, remainingSeconds: null };
+  }
+  const start = user.account_type === "guest"
+    ? 0
+    : Date.parse(`${chinaDateKey(now)}T00:00:00+08:00`);
+  const result = database().prepare(`
+    SELECT COALESCE(SUM(
+      CASE WHEN status = 'active' THEN reserved_seconds ELSE used_seconds END
+    ), 0) AS used
+    FROM voice_sessions
+    WHERE user_id = ? AND status != 'cancelled' AND started_at >= ?
+  `).get(userId, start) as { used: number };
+  const usedSeconds = Math.max(0, Math.round(result.used));
+  return {
+    limitSeconds,
+    usedSeconds,
+    remainingSeconds: Math.max(0, limitSeconds - usedSeconds),
+  };
+}
+
+export async function reserveVoiceSession(
+  userId: string,
+  companionVoice: string,
+): Promise<{ sessionId: string; quotaSeconds: number }> {
+  return serialized(async () => {
+    const allowance = await voiceSecondsAllowance(userId);
+    const quotaSeconds = allowance.remainingSeconds ?? 30 * 60;
+    if (quotaSeconds <= 0) throw new AuthStoreError("INVALID_PASSWORD", "语音额度已用完。");
+    const sessionId = randomUUID();
+    database().prepare(`
+      INSERT INTO voice_sessions(
+        id, user_id, reserved_seconds, used_seconds, status, companion_voice, started_at
+      ) VALUES(?, ?, ?, 0, 'active', ?, ?)
+    `).run(sessionId, userId, quotaSeconds, companionVoice, Date.now());
+    return { sessionId, quotaSeconds };
+  });
+}
+
+export async function finalizeVoiceSession(
+  userId: string,
+  sessionId: string,
+  usedSeconds: number,
+): Promise<void> {
+  return serialized(async () => {
+    const normalized = Math.max(0, Math.min(30 * 60, Math.ceil(usedSeconds)));
+    database().prepare(`
+      UPDATE voice_sessions SET used_seconds = MIN(reserved_seconds, ?),
+        status = 'closed', finished_at = ?
+      WHERE id = ? AND user_id = ? AND status = 'active'
+    `).run(normalized, Date.now(), sessionId, userId);
+  });
+}
+
+export async function cancelVoiceReservation(
+  userId: string,
+  sessionId: string,
+): Promise<void> {
+  return serialized(async () => {
+    database().prepare(`
+      UPDATE voice_sessions SET status = 'cancelled', finished_at = ?
+      WHERE id = ? AND user_id = ? AND status = 'active'
+    `).run(Date.now(), sessionId, userId);
+  });
+}
+
+export async function recordVoiceUsage(userId: string, seconds: number): Promise<void> {
+  const session = await reserveVoiceSession(userId, "breeze");
+  await finalizeVoiceSession(userId, session.sessionId, seconds);
 }
 
 export function resetAuthStoreForTests(): void {
   operationQueue = Promise.resolve();
+  adminBootstrap = null;
+  resetDatabaseForTests();
 }

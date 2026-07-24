@@ -1,5 +1,9 @@
 import { getRequestSession, validCsrfToken } from "@/lib/auth-session";
-import { recordUsage, usageAllowance } from "@/lib/auth-store";
+import {
+  cancelVoiceReservation,
+  recordUsage,
+  reserveVoiceSession,
+} from "@/lib/auth-store";
 import { checkConnectionRateLimit } from "@/lib/rate-limit";
 import {
   hasSameOrigin,
@@ -7,18 +11,37 @@ import {
   requestClientIdentifier,
 } from "@/lib/request-security";
 import { createVoiceWorkerToken } from "@/lib/voice-token";
+import { isCompanionVoice } from "@/types/product";
 
 export const runtime = "nodejs";
+const MAX_BODY_BYTES = 2 * 1024;
 
 export async function POST(request: Request): Promise<Response> {
   if (!hasSameOrigin(request)) {
     return jsonError("INVALID_ORIGIN", "请求来源不匹配。", 403);
   }
-
   const session = await getRequestSession(request);
   if (!session) return jsonError("UNAUTHENTICATED", "请先登录。", 401);
   if (!validCsrfToken(session, request.headers.get("x-csrf-token"))) {
     return jsonError("INVALID_CSRF", "页面会话已过期，请刷新后重试。", 403);
+  }
+
+  let body: unknown;
+  try {
+    const raw = await request.text();
+    if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
+      return jsonError("INVALID_VOICE", "陪伴角色请求过大。", 413);
+    }
+    body = JSON.parse(raw);
+  } catch {
+    return jsonError("INVALID_VOICE", "请选择有效的陪伴角色。", 400);
+  }
+  const companionVoice =
+    typeof body === "object" && body !== null
+      ? (body as Record<string, unknown>).companionVoice
+      : null;
+  if (!isCompanionVoice(companionVoice)) {
+    return jsonError("INVALID_VOICE", "请选择有效的陪伴角色。", 400);
   }
 
   const rateLimit = checkConnectionRateLimit(
@@ -30,42 +53,44 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  const allowance = usageAllowance(session.user, "realtimeConnections");
-  if (!allowance.allowed) {
+  let reservation: { sessionId: string; quotaSeconds: number };
+  try {
+    reservation = await reserveVoiceSession(session.user.id, companionVoice);
+  } catch {
     return jsonError(
-      "GUEST_DAILY_LIMIT",
-      `今日访客语音连接额度已用完（${allowance.limit} 次），请明天再试。`,
+      "VOICE_QUOTA_EXHAUSTED",
+      session.user.accountType === "guest"
+        ? "访客体验时间已经用完，请在微信中继续使用。"
+        : "今天的语音时间已经用完，明天再来聊聊。",
       429,
     );
   }
 
   try {
-    const issued = createVoiceWorkerToken(session.user.id);
+    const issued = createVoiceWorkerToken(
+      session.user.id,
+      reservation.sessionId,
+      companionVoice,
+      reservation.quotaSeconds,
+    );
     await recordUsage(session.user.id, "realtimeConnections");
     return Response.json(
       {
         token: issued.token,
         expiresAt: issued.expiresAt,
         websocketPath: "/voice-ws",
-        inputAudio: {
-          format: "pcm_s16le",
-          sampleRate: 16_000,
-          channels: 1,
-        },
-        outputAudio: {
-          format: "pcm_s16le",
-          sampleRate: 24_000,
-          channels: 1,
-        },
+        remainingSeconds: reservation.quotaSeconds,
+        inputAudio: { format: "pcm_s16le", sampleRate: 16_000, channels: 1 },
+        outputAudio: { format: "pcm_s16le", sampleRate: 24_000, channels: 1 },
       },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch {
+    await cancelVoiceReservation(session.user.id, reservation.sessionId);
     return jsonError(
       "VOICE_WORKER_NOT_CONFIGURED",
-      "低成本语音服务尚未完成安全配置，请切换高保真模式。",
+      "语音服务正在准备中，请稍后再试。",
       503,
     );
   }
 }
-

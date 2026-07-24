@@ -5,12 +5,18 @@ const authMocks = vi.hoisted(() => ({
   getRequestSession: vi.fn(),
   recordUsage: vi.fn(),
   usageAllowance: vi.fn(),
+  getActiveCompanionPrompt: vi.fn(),
+  updateConversation: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({ getRequestSession: authMocks.getRequestSession }));
 vi.mock("@/lib/auth-store", () => ({
   recordUsage: authMocks.recordUsage,
   usageAllowance: authMocks.usageAllowance,
+}));
+vi.mock("@/lib/conversation-store", () => ({
+  getActiveCompanionPrompt: authMocks.getActiveCompanionPrompt,
+  updateConversation: authMocks.updateConversation,
 }));
 
 import { POST } from "@/app/api/reply/route";
@@ -55,6 +61,10 @@ describe("POST /api/reply", () => {
     });
     authMocks.recordUsage.mockResolvedValue(undefined);
     authMocks.usageAllowance.mockReturnValue({ allowed: true, limit: null, used: 0 });
+    authMocks.getActiveCompanionPrompt.mockReturnValue(
+      "先接住情绪，再给恰到好处的回应。",
+    );
+    authMocks.updateConversation.mockReturnValue(true);
     configure();
   });
 

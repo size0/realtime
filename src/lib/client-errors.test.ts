@@ -3,7 +3,8 @@ import { mapApiError, mapBrowserError } from "@/lib/client-errors";
 
 describe("client error mapping", () => {
   it("maps stable API error codes to actionable Chinese messages", () => {
-    expect(mapApiError("MISSING_API_KEY")).toContain("API Key");
+    expect(mapApiError("MISSING_API_KEY")).toContain("模型密钥");
+    expect(mapApiError("MISSING_API_KEY")).not.toContain("sk-");
     expect(mapApiError("RATE_LIMITED")).toContain("频繁");
   });
 

@@ -11,9 +11,9 @@ class Settings:
     worker_secret: str
     asr_model: str = "FunAudioLLM/SenseVoiceSmall"
     tts_model: str = "qwen3-tts-instruct-flash-realtime"
-    tts_voice: str = "Cherry"
     tts_ws_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     dashscope_api_key: str = ""
+    usage_report_url: str = ""
     vad_threshold: float = 0.5
     min_silence_duration_ms: int = 1100
     speech_pad_ms: int = 160
@@ -50,12 +50,15 @@ class Settings:
             tts_model=os.environ.get(
                 "VOICE_TTS_MODEL", "qwen3-tts-instruct-flash-realtime"
             ).strip(),
-            tts_voice=os.environ.get("VOICE_TTS_VOICE", "Cherry").strip(),
             tts_ws_url=os.environ.get(
                 "VOICE_TTS_WS_URL",
                 "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
             ).strip(),
             dashscope_api_key=os.environ.get("DASHSCOPE_API_KEY", "").strip(),
+            usage_report_url=os.environ.get(
+                "VOICE_USAGE_REPORT_URL",
+                f"{app_origin}/api/internal/voice-usage",
+            ).strip(),
             vad_threshold=threshold,
             min_silence_duration_ms=min_silence,
             speech_pad_ms=speech_pad,

@@ -29,6 +29,7 @@ class QwenRealtimeTtsProvider:
         api_key: str,
         model: str,
         voice: str,
+        instructions: str,
         websocket_url: str,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
@@ -37,6 +38,7 @@ class QwenRealtimeTtsProvider:
         self._api_key = api_key
         self._model = model
         self._voice = voice
+        self._instructions = instructions
         self._websocket_url = websocket_url
         self._loop = loop
         self._queue: asyncio.Queue[TtsOutput] = asyncio.Queue(maxsize=256)
@@ -118,7 +120,7 @@ class QwenRealtimeTtsProvider:
             response_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
             mode="commit",
             language_type="Auto",
-            instructions="温柔、自然、克制，像深夜里认真陪伴的朋友。语速稍慢，有呼吸感，避免客服播报腔。",
+            instructions=self._instructions,
             optimize_instructions=True,
         )
         self._client = client
@@ -192,4 +194,3 @@ def _close_client(client: Any) -> None:
         client.close()
     except Exception:
         pass
-

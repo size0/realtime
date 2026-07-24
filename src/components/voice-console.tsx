@@ -2,49 +2,58 @@
 
 import type { CSSProperties } from "react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  AudioLines,
   Captions,
   CaptionsOff,
-  ChevronDown,
+  History,
+  Leaf,
   LockKeyhole,
-  LogIn,
-  LogOut,
   Mic,
   MicOff,
+  MoonStar,
   PhoneOff,
-  Radio,
   RotateCcw,
   Settings,
+  Sparkles,
   Trash2,
 } from "lucide-react";
-import { useRealtimeVoice } from "@/hooks/use-realtime-voice";
 import { useSplitVoice } from "@/hooks/use-split-voice";
 import type { PublicUser } from "@/lib/auth-store";
-import { DEFAULT_REALTIME_VOICE } from "@/lib/qwen-session";
 import {
-  REALTIME_VOICE_OPTIONS,
-  type CallStatus,
-  type RealtimeVoice,
-} from "@/types/realtime";
-import type { VoiceMode } from "@/types/split-voice";
+  COMPANION_OPTIONS,
+  isCompanionVoice,
+  type CompanionVoice,
+} from "@/types/product";
+import type { CallStatus } from "@/types/realtime";
+
+const COMPANION_STORAGE_KEY = "treehole.companion.v1";
 
 const STATUS_COPY: Record<CallStatus, { title: string; detail: string }> = {
-  idle: { title: "准备就绪", detail: "戴上耳机，开启一段自然对话" },
-  "requesting-permission": { title: "等待麦克风", detail: "请允许浏览器访问你的麦克风" },
-  connecting: { title: "建立声场", detail: "正在连接实时语音服务" },
-  listening: { title: "我在听", detail: "直接说话，停顿后我会回应" },
-  thinking: { title: "正在理解", detail: "你随时可以继续补充" },
-  speaking: { title: "正在回应", detail: "说话即可打断，不必等待" },
-  muted: { title: "麦克风已静音", detail: "取消静音后继续对话" },
-  disconnected: { title: "通话已结束", detail: "文字记录仍保存在这台浏览器" },
-  error: { title: "连接未完成", detail: "检查提示后可以重新尝试" },
+  idle: { title: "今晚，想说点什么？", detail: "这里没有评判，也不用组织好语言。" },
+  "requesting-permission": {
+    title: "等待麦克风",
+    detail: "请允许浏览器使用麦克风，音频不会被保存。",
+  },
+  connecting: { title: "正在靠近", detail: "给彼此一点点时间，声音马上就到。" },
+  listening: { title: "我在听", detail: "慢慢说，停下来之后我再回应你。" },
+  thinking: { title: "让我想一想", detail: "你随时可以继续补充，不用等我。" },
+  speaking: { title: "正在回应", detail: "想说话就直接开口，我会停下来听你。" },
+  muted: { title: "麦克风已静音", detail: "准备好以后，再打开麦克风就好。" },
+  disconnected: { title: "这段对话结束了", detail: "谢谢你愿意在这里说一说。" },
+  error: { title: "刚刚没能连上", detail: "检查提示后，可以重新试一次。" },
 };
 
+const ROLE_ICON = {
+  breeze: Leaf,
+  glow: Sparkles,
+  nightwatch: MoonStar,
+} satisfies Record<CompanionVoice, typeof Leaf>;
+
 function formatDuration(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
@@ -53,20 +62,20 @@ type OrbStyle = CSSProperties & { "--audio-level": number };
 interface VoiceConsoleProps {
   user: PublicUser;
   csrfToken: string;
+  defaultCompanion: CompanionVoice;
 }
 
-export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
+export function VoiceConsole({
+  user,
+  csrfToken,
+  defaultCompanion,
+}: VoiceConsoleProps) {
   const [showCaptions, setShowCaptions] = useState(true);
-  const [selectedVoice, setSelectedVoice] = useState<RealtimeVoice>(DEFAULT_REALTIME_VOICE);
-  const [voiceMode, setVoiceMode] = useState<VoiceMode>("economy");
+  const [selectedCompanion, setSelectedCompanion] =
+    useState<CompanionVoice>(defaultCompanion);
+  const [showWechatTip, setShowWechatTip] = useState(false);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
-  const splitVoice = useSplitVoice("Cherry", csrfToken, voiceMode === "economy");
-  const realtimeVoice = useRealtimeVoice(
-    selectedVoice,
-    voiceMode === "qwen-realtime",
-  );
-  const voiceController =
-    voiceMode === "economy" ? splitVoice : realtimeVoice;
+  const voice = useSplitVoice(selectedCompanion, csrfToken);
   const {
     callStatus,
     messages,
@@ -74,189 +83,202 @@ export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
     isMuted,
     isActive,
     audioLevel,
-    elapsedSeconds,
+    remainingSeconds,
     connect,
     endCall,
     toggleMute,
     clearTranscript,
-  } = voiceController;
+  } = voice;
 
+  const companion = useMemo(
+    () =>
+      COMPANION_OPTIONS.find((option) => option.value === selectedCompanion) ??
+      COMPANION_OPTIONS[0],
+    [selectedCompanion],
+  );
   const status = STATUS_COPY[callStatus];
+  const quotaEnded = remainingSeconds === 0;
 
-  const logout = async () => {
-    await fetch("/api/auth/logout", {
-      method: "POST",
-      headers: { "X-CSRF-Token": csrfToken },
-    }).catch(() => undefined);
-    window.location.assign("/login");
-  };
+  useEffect(() => {
+    const stored = window.localStorage.getItem(COMPANION_STORAGE_KEY);
+    if (!isCompanionVoice(stored)) return;
+    const frame = window.requestAnimationFrame(() => setSelectedCompanion(stored));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(COMPANION_STORAGE_KEY, selectedCompanion);
+  }, [selectedCompanion]);
 
   useEffect(() => {
     if (showCaptions && messages.length > 0) {
-      transcriptEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      transcriptEndRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+      });
     }
   }, [messages, showCaptions]);
 
-  return (
-    <main className="voice-shell">
-      <div className="ambient-grid" aria-hidden="true" />
-      <div className="grain" aria-hidden="true" />
+  const chooseCompanion = (value: CompanionVoice) => {
+    if (!isActive) setSelectedCompanion(value);
+  };
 
-      <header className="topbar">
-        <a className="brand" href="#main-stage" aria-label="声场首页">
-          <span className="brand-mark"><AudioLines size={17} strokeWidth={2.2} /></span>
-          <span>声场</span>
-          <small>REALTIME</small>
+  return (
+    <main className="treehole-shell">
+      <div className="treehole-night" aria-hidden="true" />
+      <div className="treehole-grain" aria-hidden="true" />
+
+      <header className="treehole-topbar">
+        <a className="treehole-brand" href="#voice-stage" aria-label="回到语音对话">
+          <span className="treehole-brand-mark"><MoonStar size={17} /></span>
+          <span>树洞</span>
+          <small>听你慢慢说</small>
         </a>
-        <div className="topbar-actions">
-          <div className="privacy-chip">
+        <div className="treehole-account">
+          <span className="treehole-privacy">
             <LockKeyhole size={13} />
-            <span>仅保存文字 · 本地设备</span>
-          </div>
+            文字加密保存30天 · 不保存音频
+          </span>
+          <span className="treehole-user">{user.displayName}</span>
           {user.role === "admin" && (
-            <Link className="topbar-action" href="/admin" aria-label="打开管理后台">
-              <Settings size={15} />
-              <span>后台</span>
+            <Link href="/admin" className="treehole-icon-link" aria-label="管理后台">
+              <Settings size={16} />
             </Link>
-          )}
-          <span className="account-chip">{user.displayName}</span>
-          {user.accountType === "guest" ? (
-            <Link className="topbar-action" href="/login" aria-label="管理员或已有账号登录">
-              <LogIn size={15} />
-              <span>账号登录</span>
-            </Link>
-          ) : (
-            <button className="topbar-action" type="button" onClick={() => void logout()} aria-label="退出登录">
-              <LogOut size={15} />
-            </button>
           )}
         </div>
       </header>
 
-      <section className="experience-grid" id="main-stage">
-        <div className="conversation-stage">
-          <div className="stage-index" aria-hidden="true">01 / LIVE VOICE</div>
-          <div className={`orb-field status-${callStatus}`}>
-            <div className="orb-orbit orbit-one" aria-hidden="true" />
-            <div className="orb-orbit orbit-two" aria-hidden="true" />
-            <div
-              className="voice-orb"
-              aria-hidden="true"
-              style={{ "--audio-level": audioLevel } as OrbStyle}
-            >
-              <div className="orb-surface" />
-              <div className="orb-core"><Radio size={34} strokeWidth={1.4} /></div>
-            </div>
-            <span className="signal-note signal-note-top" aria-hidden="true">48 kHz</span>
-            <span className="signal-note signal-note-bottom" aria-hidden="true">
-              {voiceMode === "economy" ? "LOCAL ASR / SPLIT" : "WEBRTC / LIVE"}
-            </span>
-          </div>
-
-          <div className="status-block" aria-live="polite">
-            <div className="status-line">
-              <span className={`status-dot ${isActive ? "is-live" : ""}`} />
-              <span>{status.title}</span>
-              {isActive && <time>{formatDuration(elapsedSeconds)}</time>}
-            </div>
+      <section className="treehole-layout" id="voice-stage">
+        <section className="treehole-stage" aria-labelledby="voice-status-title">
+          <div className="treehole-stage-copy">
+            <span className="treehole-kicker">A QUIET PLACE FOR YOU</span>
+            <h1 id="voice-status-title">{errorMessage ? "再试一次也没关系" : status.title}</h1>
             <p>{errorMessage ?? status.detail}</p>
           </div>
 
-          {!isActive ? (
-            <div className="start-cluster">
-              <label className="voice-select-label" htmlFor="voice-mode">
-                对话模式
-              </label>
-              <div className="voice-select-wrap">
-                <select
-                  id="voice-mode"
-                  value={voiceMode}
-                  onChange={(event) =>
-                    setVoiceMode(event.target.value as VoiceMode)
-                  }
-                  aria-label="选择对话模式"
-                >
-                  <option value="economy">省钱模式 · 本地识别 + 固定音色</option>
-                  <option value="qwen-realtime">高保真模式 · Qwen Realtime</option>
-                </select>
-                <ChevronDown size={17} aria-hidden="true" />
-              </div>
-              <label className="voice-select-label" htmlFor="voice-select">选择音色</label>
-              <div className="voice-select-wrap">
-                {voiceMode === "economy" ? (
-                  <select
-                    id="voice-select"
-                    value="Cherry"
-                    disabled
-                    aria-label="固定树洞音色"
-                  >
-                    <option value="Cherry">树洞 Cherry · 温柔陪伴</option>
-                  </select>
-                ) : (
-                  <select
-                    id="voice-select"
-                    value={selectedVoice}
-                    onChange={(event) =>
-                      setSelectedVoice(event.target.value as RealtimeVoice)
-                    }
-                    aria-label="选择音色"
-                  >
-                    {REALTIME_VOICE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label} · {option.description}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <ChevronDown size={17} aria-hidden="true" />
-              </div>
-              <button className="start-button" type="button" onClick={() => void connect()}>
-                {callStatus === "error" ? <RotateCcw size={19} /> : <Mic size={19} />}
-                <span>{callStatus === "error" ? "重新连接" : "开始对话"}</span>
-              </button>
-              <p className="permission-note">
-                {voiceMode === "economy"
-                  ? "本地断句与识别，回答文字生成后按句朗读"
-                  : "高保真回退模式会持续连接实时语音模型"}
-              </p>
+          <div className={`treehole-orb-wrap status-${callStatus}`}>
+            <span className="treehole-orbit orbit-a" aria-hidden="true" />
+            <span className="treehole-orbit orbit-b" aria-hidden="true" />
+            <div
+              className="treehole-orb"
+              style={{ "--audio-level": audioLevel } as OrbStyle}
+              aria-hidden="true"
+            >
+              <span className="treehole-orb-glow" />
+              <span className="treehole-orb-core">
+                {callStatus === "speaking" ? <Sparkles size={34} /> : <Leaf size={34} />}
+              </span>
             </div>
-          ) : (
-            <div className="call-controls" aria-label="通话控制">
+            <div className="treehole-live-state">
+              <span className={isActive ? "is-live" : ""} />
+              {isActive ? companion.name : companion.greeting}
+            </div>
+          </div>
+
+          {isActive && (
+            <div className="treehole-time" aria-live="polite">
+              <span>剩余时间</span>
+              <strong>{formatDuration(remainingSeconds ?? 0)}</strong>
+            </div>
+          )}
+
+          {!isActive && !quotaEnded && (
+            <div className="treehole-start-panel">
+              <div className="treehole-role-heading">
+                <span>今晚谁来陪你</span>
+                <small>下次会记住你的选择</small>
+              </div>
+              <div className="treehole-roles" role="radiogroup" aria-label="选择陪伴角色">
+                {COMPANION_OPTIONS.map((option) => {
+                  const Icon = ROLE_ICON[option.value];
+                  const selected = option.value === selectedCompanion;
+                  return (
+                    <button
+                      className={`treehole-role ${selected ? "is-selected" : ""}`}
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => chooseCompanion(option.value)}
+                    >
+                      <span className="treehole-role-icon"><Icon size={18} /></span>
+                      <strong>{option.name}</strong>
+                      <small>{option.description}</small>
+                    </button>
+                  );
+                })}
+              </div>
               <button
-                className={`round-control ${isMuted ? "is-active" : ""}`}
+                className="treehole-start"
+                type="button"
+                onClick={() => void connect()}
+              >
+                {callStatus === "error" ? <RotateCcw size={19} /> : <Mic size={19} />}
+                <span>{callStatus === "error" ? "重新试试" : "开始聊聊"}</span>
+              </button>
+              <p className="treehole-mic-note">首次开始时，浏览器会询问麦克风权限</p>
+            </div>
+          )}
+
+          {isActive && (
+            <div className="treehole-controls" aria-label="通话控制">
+              <button
+                className={isMuted ? "is-active" : ""}
                 type="button"
                 onClick={toggleMute}
-                aria-label={isMuted ? "取消静音" : "静音麦克风"}
+                aria-label={isMuted ? "取消静音" : "静音"}
                 aria-pressed={isMuted}
               >
-                {isMuted ? <MicOff size={21} /> : <Mic size={21} />}
+                {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                <span>{isMuted ? "打开麦克风" : "静音"}</span>
               </button>
               <button
-                className="round-control"
                 type="button"
-                onClick={() => setShowCaptions((visible) => !visible)}
+                onClick={() => setShowCaptions((value) => !value)}
                 aria-label={showCaptions ? "隐藏字幕" : "显示字幕"}
                 aria-pressed={showCaptions}
               >
                 {showCaptions ? <Captions size={22} /> : <CaptionsOff size={22} />}
+                <span>字幕</span>
               </button>
-              <button className="round-control end-control" type="button" onClick={endCall} aria-label="结束通话">
+              <button
+                className="is-end"
+                type="button"
+                onClick={endCall}
+                aria-label="结束通话"
+              >
                 <PhoneOff size={22} />
+                <span>结束</span>
               </button>
             </div>
           )}
-        </div>
 
-        <aside className="transcript-rail" aria-label="实时字幕">
-          <div className="rail-header">
-            <div>
-              <span className="eyebrow">TRANSCRIPT</span>
-              <h2>对话记录</h2>
+          {user.accountType === "guest" && (quotaEnded || !isActive) && (
+            <div className={`treehole-wechat ${quotaEnded ? "is-prominent" : ""}`}>
+              <div>
+                <strong>{quotaEnded ? "体验时间用完了" : "访客可先体验 3 分钟"}</strong>
+                <span>在微信内打开后，每天可以继续聊 10 分钟。</span>
+              </div>
+              <button type="button" onClick={() => setShowWechatTip((value) => !value)}>
+                在微信里继续聊
+              </button>
+              {showWechatTip && (
+                <p>请在微信中打开 <b>voice.xdw0.cn</b>，会自动生成你的匿名树洞账号。</p>
+              )}
             </div>
-            <div className="rail-actions">
+          )}
+        </section>
+
+        <aside className={`treehole-transcript ${showCaptions ? "" : "is-hidden"}`}>
+          <header>
+            <div>
+              <span>只属于这段夜晚</span>
+              <h2><History size={18} /> 对话记录</h2>
+            </div>
+            <div>
               <button
                 type="button"
-                onClick={() => setShowCaptions((visible) => !visible)}
+                onClick={() => setShowCaptions((value) => !value)}
                 aria-label={showCaptions ? "隐藏字幕" : "显示字幕"}
               >
                 {showCaptions ? <Captions size={17} /> : <CaptionsOff size={17} />}
@@ -265,48 +287,44 @@ export function VoiceConsole({ user, csrfToken }: VoiceConsoleProps) {
                 type="button"
                 onClick={clearTranscript}
                 disabled={messages.length === 0}
-                aria-label="清空对话记录"
+                aria-label="清空所有对话记录"
               >
                 <Trash2 size={16} />
               </button>
             </div>
-          </div>
+          </header>
 
-          <div className="transcript-list" aria-live="polite">
+          <div className="treehole-messages" aria-live="polite">
             {!showCaptions ? (
-              <div className="rail-empty">
+              <div className="treehole-empty">
                 <CaptionsOff size={25} />
-                <p>字幕已隐藏</p>
+                <p>字幕已经藏起来了</p>
                 <span>语音仍会正常播放</span>
               </div>
             ) : messages.length === 0 ? (
-              <div className="rail-empty">
-                <Captions size={25} />
-                <p>对话会出现在这里</p>
-                <span>只保存文字，不保存音频</span>
+              <div className="treehole-empty">
+                <MoonStar size={26} />
+                <p>说出口的话，会轻轻落在这里</p>
+                <span>你可以随时清空记录</span>
               </div>
             ) : (
-              messages.map((message, index) => (
+              messages.map((message) => (
                 <article
-                  className={`transcript-entry role-${message.role}`}
+                  className={`treehole-message role-${message.role}`}
                   key={message.id}
                   data-status={message.status}
                 >
-                  <div className="entry-meta">
-                    <span>{String(index + 1).padStart(2, "0")}</span>
-                    <strong>{message.role === "user" ? "你" : "声场"}</strong>
-                    {message.status === "interrupted" && <em>已打断</em>}
-                  </div>
+                  <span>{message.role === "user" ? "你" : companion.name}</span>
                   <p>{message.text}</p>
+                  {message.status === "interrupted" && <small>被你打断</small>}
                 </article>
               ))
             )}
             <div ref={transcriptEndRef} />
           </div>
-
-          <footer className="rail-footer">
+          <footer>
             <span>{messages.length} / 200</span>
-            <span>LOCAL STORAGE</span>
+            <span>30天后自动清理</span>
           </footer>
         </aside>
       </section>

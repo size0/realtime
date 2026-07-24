@@ -1,14 +1,18 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { isCompanionVoice, type CompanionVoice } from "@/types/product";
 
-const TOKEN_VERSION = 1;
+const TOKEN_VERSION = 2;
 const TOKEN_TTL_MS = 60_000;
 const MAX_TOKEN_BYTES = 2_048;
-const SUBJECT_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 export interface VoiceWorkerTokenPayload {
   v: typeof TOKEN_VERSION;
   sub: string;
+  sid: string;
+  voice: CompanionVoice;
+  quota: number;
   exp: number;
   nonce: string;
 }
@@ -42,7 +46,14 @@ function isPayload(value: unknown, now: number): value is VoiceWorkerTokenPayloa
   return (
     payload.v === TOKEN_VERSION &&
     typeof payload.sub === "string" &&
-    SUBJECT_PATTERN.test(payload.sub) &&
+    IDENTIFIER_PATTERN.test(payload.sub) &&
+    typeof payload.sid === "string" &&
+    IDENTIFIER_PATTERN.test(payload.sid) &&
+    isCompanionVoice(payload.voice) &&
+    typeof payload.quota === "number" &&
+    Number.isInteger(payload.quota) &&
+    payload.quota > 0 &&
+    payload.quota <= 30 * 60 &&
     typeof payload.exp === "number" &&
     Number.isSafeInteger(payload.exp) &&
     payload.exp > now &&
@@ -54,14 +65,25 @@ function isPayload(value: unknown, now: number): value is VoiceWorkerTokenPayloa
 
 export function createVoiceWorkerToken(
   subject: string,
+  sessionId: string,
+  voice: string,
+  quotaSeconds: number,
   now = Date.now(),
   nonce = randomBytes(24).toString("base64url"),
 ): { token: string; expiresAt: number } {
-  if (!SUBJECT_PATTERN.test(subject)) throw new Error("Invalid voice token subject.");
+  if (!IDENTIFIER_PATTERN.test(subject)) throw new Error("Invalid voice token subject.");
+  if (!IDENTIFIER_PATTERN.test(sessionId)) throw new Error("Invalid voice session id.");
+  if (!isCompanionVoice(voice)) throw new Error("Invalid companion voice.");
+  if (!Number.isInteger(quotaSeconds) || quotaSeconds < 1 || quotaSeconds > 30 * 60) {
+    throw new Error("Invalid voice quota.");
+  }
   if (!NONCE_PATTERN.test(nonce)) throw new Error("Invalid voice token nonce.");
   const payload: VoiceWorkerTokenPayload = {
     v: TOKEN_VERSION,
     sub: subject,
+    sid: sessionId,
+    voice,
+    quota: quotaSeconds,
     exp: now + TOKEN_TTL_MS,
     nonce,
   };
@@ -82,7 +104,6 @@ export function verifyVoiceWorkerToken(
   const encodedPayload = token.slice(0, separator);
   const providedSignature = token.slice(separator + 1);
   if (!safeEqual(signature(encodedPayload), providedSignature)) return null;
-
   try {
     const parsed: unknown = JSON.parse(
       Buffer.from(encodedPayload, "base64url").toString("utf8"),
@@ -92,4 +113,3 @@ export function verifyVoiceWorkerToken(
     return null;
   }
 }
-

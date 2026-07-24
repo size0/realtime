@@ -9,10 +9,7 @@ import {
   useState,
 } from "react";
 import { mapApiError, mapBrowserError } from "@/lib/client-errors";
-import {
-  initialRealtimeState,
-  realtimeReducer,
-} from "@/lib/realtime-events";
+import { initialRealtimeState, realtimeReducer } from "@/lib/realtime-events";
 import { createReplyHistory } from "@/lib/reply-tool";
 import { splitForSpeech } from "@/lib/sentence-stream";
 import {
@@ -20,9 +17,9 @@ import {
   loadTranscript,
   saveTranscript,
 } from "@/lib/transcript-storage";
-import type { CallStatus } from "@/types/realtime";
+import type { CompanionVoice } from "@/types/product";
+import type { CallStatus, TranscriptMessage } from "@/types/realtime";
 import type {
-  SplitTtsVoice,
   SplitVoiceClientEvent,
   SplitVoiceServerEvent,
 } from "@/types/split-voice";
@@ -35,6 +32,7 @@ interface VoiceTokenResponse {
   token: string;
   websocketPath: string;
   expiresAt: number;
+  remainingSeconds: number;
 }
 
 interface ReplyResponse {
@@ -60,7 +58,8 @@ function isVoiceTokenResponse(value: unknown): value is VoiceTokenResponse {
     typeof value.token === "string" &&
     typeof value.websocketPath === "string" &&
     value.websocketPath.startsWith("/") &&
-    typeof value.expiresAt === "number"
+    typeof value.expiresAt === "number" &&
+    typeof value.remainingSeconds === "number"
   );
 }
 
@@ -85,16 +84,15 @@ async function readApiError(response: Response): Promise<string> {
   try {
     const payload: unknown = await response.json();
     if (isRecord(payload) && isRecord(payload.error)) {
-      const code =
-        typeof payload.error.code === "string" ? payload.error.code : undefined;
-      const message =
+      return mapApiError(
+        typeof payload.error.code === "string" ? payload.error.code : undefined,
         typeof payload.error.message === "string"
           ? payload.error.message
-          : undefined;
-      return mapApiError(code, message);
+          : undefined,
+      );
     }
   } catch {
-    // Use the stable client-side fallback below.
+    // Fall through to a stable message.
   }
   return mapApiError(undefined);
 }
@@ -115,15 +113,12 @@ function websocketUrl(path: string, token: string): string {
   return url.toString();
 }
 
-export function useSplitVoice(
-  voice: SplitTtsVoice,
-  csrfToken: string,
-  active = true,
-) {
+export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
   const [state, dispatch] = useReducer(realtimeReducer, initialRealtimeState);
   const [isMuted, setIsMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [replyTier, setReplyTier] = useState<"economy" | "strong" | null>(null);
 
   const websocketRef = useRef<WebSocket | null>(null);
@@ -143,6 +138,8 @@ export function useSplitVoice(
   const seenEventIdsRef = useRef(new Set<string>());
   const activeSpeechRef = useRef<ActiveSpeechResponse | null>(null);
   const callStartedAtRef = useRef<number | null>(null);
+  const quotaSecondsRef = useRef<number | null>(null);
+  const conversationIdRef = useRef<string | null>(null);
   const hydratedRef = useRef(false);
   const mutedRef = useRef(false);
   const messagesRef = useRef(state.messages);
@@ -154,6 +151,41 @@ export function useSplitVoice(
     }
   }, []);
 
+  const syncMessage = useCallback(
+    (message: TranscriptMessage) => {
+      const conversationId = conversationIdRef.current;
+      if (!conversationId || !message.text.trim()) return;
+      void fetch(`/api/conversations/${conversationId}/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ messages: [message] }),
+        keepalive: true,
+      });
+    },
+    [csrfToken],
+  );
+
+  const updateConversationStatus = useCallback(
+    (status: "completed" | "interrupted" | "failed") => {
+      const conversationId = conversationIdRef.current;
+      conversationIdRef.current = null;
+      if (!conversationId) return;
+      void fetch(`/api/conversations/${conversationId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ status }),
+        keepalive: true,
+      });
+    },
+    [csrfToken],
+  );
+
   const stopPlayback = useCallback(() => {
     if (playbackDoneTimerRef.current !== null) {
       window.clearTimeout(playbackDoneTimerRef.current);
@@ -163,7 +195,7 @@ export function useSplitVoice(
       try {
         source.stop();
       } catch {
-        // The source may already have finished.
+        // Already ended.
       }
     }
     scheduledSourcesRef.current.clear();
@@ -194,9 +226,7 @@ export function useSplitVoice(
         const normalized = (value - 128) / 128;
         sumSquares += normalized * normalized;
       }
-      setAudioLevel(
-        Math.min(1, Math.sqrt(sumSquares / buffer.length) * 4.5),
-      );
+      setAudioLevel(Math.min(1, Math.sqrt(sumSquares / buffer.length) * 4.5));
       meterFrameRef.current = requestAnimationFrame(sample);
     };
     meterFrameRef.current = requestAnimationFrame(sample);
@@ -214,7 +244,7 @@ export function useSplitVoice(
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "stop" }));
     }
-    socket?.close();
+    socket?.close(1000);
 
     captureNodeRef.current?.disconnect();
     captureSourceRef.current?.disconnect();
@@ -222,17 +252,18 @@ export function useSplitVoice(
     captureNodeRef.current = null;
     captureSourceRef.current = null;
     silentGainRef.current = null;
-
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     localStreamRef.current = null;
+
     stopMeter();
     if (audioContextRef.current) void audioContextRef.current.close();
     audioContextRef.current = null;
-
     callStartedAtRef.current = null;
+    quotaSecondsRef.current = null;
     mutedRef.current = false;
     setIsMuted(false);
     setElapsedSeconds(0);
+    setRemainingSeconds(null);
     setReplyTier(null);
     seenEventIdsRef.current.clear();
   }, [stopMeter, stopPlayback]);
@@ -266,10 +297,7 @@ export function useSplitVoice(
       const generation = replyGenerationRef.current + 1;
       replyGenerationRef.current = generation;
       dispatch({ type: "set-status", status: "thinking" });
-      const timeoutId = window.setTimeout(
-        () => controller.abort(),
-        REPLY_TIMEOUT_MS,
-      );
+      const timeoutId = window.setTimeout(() => controller.abort(), REPLY_TIMEOUT_MS);
 
       try {
         const response = await fetch("/api/reply", {
@@ -278,13 +306,14 @@ export function useSplitVoice(
           body: JSON.stringify({
             question,
             history: createReplyHistory(messagesRef.current),
+            conversationId: conversationIdRef.current,
           }),
           signal: controller.signal,
         });
         if (!response.ok) throw new Error(await readApiError(response));
         const payload: unknown = await response.json();
         if (!isReplyResponse(payload) || !payload.reply.trim()) {
-          throw new Error("回答模型返回了空内容，请再试一次。");
+          throw new Error("没有收到可朗读的回答，请再说一次。");
         }
         if (
           replyGenerationRef.current !== generation ||
@@ -296,7 +325,7 @@ export function useSplitVoice(
         const responseId = `assistant_${crypto.randomUUID()}`;
         const text = payload.reply.trim();
         const segments = splitForSpeech(text);
-        if (segments.length === 0) throw new Error("回答没有可朗读的内容。");
+        if (segments.length === 0) throw new Error("没有收到可朗读的回答。");
         setReplyTier(payload.tier);
         activeSpeechRef.current = {
           responseId,
@@ -306,11 +335,7 @@ export function useSplitVoice(
         };
         dispatch({
           type: "server-event",
-          event: {
-            type: "response.text.delta",
-            item_id: responseId,
-            delta: text,
-          },
+          event: { type: "response.text.delta", item_id: responseId, delta: text },
         });
         sendControl({
           type: "synthesize",
@@ -319,15 +344,13 @@ export function useSplitVoice(
           text: segments[0],
         });
       } catch (error: unknown) {
-        if (controller.signal.aborted || replyGenerationRef.current !== generation) {
-          return;
-        }
+        if (controller.signal.aborted || replyGenerationRef.current !== generation) return;
         dispatch({
           type: "set-error",
           message:
             error instanceof Error && error.message
               ? error.message
-              : "回答模型暂时不可用，请稍后重试。",
+              : "暂时没有接住这句话，请稍后重试。",
         });
       } finally {
         window.clearTimeout(timeoutId);
@@ -340,11 +363,10 @@ export function useSplitVoice(
   );
 
   const connect = useCallback(async () => {
-    if (!active) return;
     if (!canUseMicrophone()) {
       dispatch({
         type: "set-error",
-        message: "浏览器只允许在 HTTPS 或 localhost 中使用麦克风。",
+        message: "浏览器只允许在 HTTPS 或本机环境中使用麦克风。",
       });
       return;
     }
@@ -357,6 +379,7 @@ export function useSplitVoice(
     const failAttempt = (message: string) => {
       if (connectionAttemptRef.current !== attempt) return;
       connectionAttemptRef.current += 1;
+      updateConversationStatus("failed");
       disposeResources();
       dispatch({ type: "set-error", message });
     };
@@ -377,15 +400,41 @@ export function useSplitVoice(
       localStreamRef.current = stream;
       dispatch({ type: "set-status", status: "connecting" });
 
+      const conversationResponse = await fetch("/api/conversations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ companionVoice: voice }),
+      });
+      if (!conversationResponse.ok) {
+        throw new Error(await readApiError(conversationResponse));
+      }
+      const conversationPayload: unknown = await conversationResponse.json();
+      if (
+        !isRecord(conversationPayload) ||
+        !isRecord(conversationPayload.conversation) ||
+        typeof conversationPayload.conversation.id !== "string"
+      ) {
+        throw new Error("无法开始这段对话，请稍后重试。");
+      }
+      conversationIdRef.current = conversationPayload.conversation.id;
+
       const tokenResponse = await fetch("/api/voice/token", {
         method: "POST",
-        headers: { "X-CSRF-Token": csrfToken },
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ companionVoice: voice }),
       });
       if (!tokenResponse.ok) throw new Error(await readApiError(tokenResponse));
       const tokenPayload: unknown = await tokenResponse.json();
       if (!isVoiceTokenResponse(tokenPayload)) {
-        throw new Error("低成本语音服务返回了无效连接信息。");
+        throw new Error("语音服务返回了无效的连接信息。");
       }
+      setRemainingSeconds(tokenPayload.remainingSeconds);
 
       const context = new AudioContext();
       audioContextRef.current = context;
@@ -407,7 +456,6 @@ export function useSplitVoice(
       );
       socket.binaryType = "arraybuffer";
       websocketRef.current = socket;
-
       captureNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
         if (
           socket.readyState === WebSocket.OPEN &&
@@ -419,16 +467,17 @@ export function useSplitVoice(
       };
 
       const openPromise = new Promise<void>((resolve, reject) => {
-        const timeoutId = window.setTimeout(() => {
-          reject(new DOMException("Voice worker connection timed out", "AbortError"));
-        }, CONNECTION_TIMEOUT_MS);
+        const timeoutId = window.setTimeout(
+          () => reject(new DOMException("Voice connection timed out", "AbortError")),
+          CONNECTION_TIMEOUT_MS,
+        );
         socket.onopen = () => {
           window.clearTimeout(timeoutId);
           resolve();
         };
         socket.onerror = () => {
           window.clearTimeout(timeoutId);
-          reject(new Error("低成本语音服务连接失败，请切换高保真模式。"));
+          reject(new Error("语音服务连接失败，请稍后重试。"));
         };
       });
 
@@ -449,14 +498,22 @@ export function useSplitVoice(
 
           switch (parsed.type) {
             case "ready":
-              sendControl({ type: "configure", voice });
               callStartedAtRef.current = Date.now();
-              dispatch({
-                type: "server-event",
-                event: { type: "session.updated" },
-              });
+              quotaSecondsRef.current = parsed.remainingSeconds;
+              setRemainingSeconds(parsed.remainingSeconds);
+              dispatch({ type: "server-event", event: { type: "session.updated" } });
               break;
-            case "speech_started":
+            case "speech_started": {
+              const interrupted = activeSpeechRef.current;
+              if (interrupted) {
+                syncMessage({
+                  id: interrupted.responseId,
+                  role: "assistant",
+                  text: interrupted.text,
+                  status: "interrupted",
+                  createdAt: Date.now(),
+                });
+              }
               replyGenerationRef.current += 1;
               replyAbortControllerRef.current?.abort();
               replyAbortControllerRef.current = null;
@@ -467,6 +524,7 @@ export function useSplitVoice(
                 event: { type: "input_audio_buffer.speech_started" },
               });
               break;
+            }
             case "speech_stopped":
               dispatch({
                 type: "server-event",
@@ -474,6 +532,13 @@ export function useSplitVoice(
               });
               break;
             case "transcript":
+              syncMessage({
+                id: parsed.utteranceId,
+                role: "user",
+                text: parsed.text,
+                status: "complete",
+                createdAt: Date.now(),
+              });
               dispatch({
                 type: "server-event",
                 event: {
@@ -499,11 +564,18 @@ export function useSplitVoice(
               } else {
                 const delayMs = Math.max(
                   0,
-                  ((playbackCursorRef.current -
+                  (playbackCursorRef.current -
                     (audioContextRef.current?.currentTime ?? 0)) *
-                    1000),
+                    1000,
                 );
                 playbackDoneTimerRef.current = window.setTimeout(() => {
+                  syncMessage({
+                    id: current.responseId,
+                    role: "assistant",
+                    text: current.text,
+                    status: "complete",
+                    createdAt: Date.now(),
+                  });
                   dispatch({
                     type: "server-event",
                     event: {
@@ -519,11 +591,18 @@ export function useSplitVoice(
               }
               break;
             }
+            case "quota_warning":
+              setRemainingSeconds(parsed.remainingSeconds);
+              break;
+            case "quota_exhausted":
+              connectionAttemptRef.current += 1;
+              updateConversationStatus("completed");
+              disposeResources();
+              setRemainingSeconds(0);
+              dispatch({ type: "set-status", status: "disconnected" });
+              break;
             case "error":
-              if (
-                parsed.code === "ASR_EMPTY" ||
-                parsed.code === "INVALID_AUDIO"
-              ) {
+              if (parsed.code === "ASR_EMPTY" || parsed.code === "INVALID_AUDIO") {
                 dispatch({ type: "set-status", status: "listening" });
               } else {
                 failAttempt(parsed.message);
@@ -534,16 +613,13 @@ export function useSplitVoice(
               break;
           }
         } catch {
-          failAttempt("低成本语音服务返回了无法解析的事件。");
+          failAttempt("语音服务返回了无法解析的事件。");
         }
       };
 
       socket.onclose = (event) => {
-        if (
-          connectionAttemptRef.current === attempt &&
-          event.code !== 1000
-        ) {
-          failAttempt("低成本语音连接已断开，请重试或切换高保真模式。");
+        if (connectionAttemptRef.current === attempt && event.code !== 1000) {
+          failAttempt("语音连接已经断开，请稍后重试。");
         }
       };
 
@@ -553,11 +629,10 @@ export function useSplitVoice(
       failAttempt(
         error instanceof Error && error.message
           ? mapBrowserError(error)
-          : "低成本语音连接失败，请切换高保真模式。",
+          : "语音连接失败，请稍后重试。",
       );
     }
   }, [
-    active,
     csrfToken,
     disposeResources,
     requestReply,
@@ -565,14 +640,17 @@ export function useSplitVoice(
     sendControl,
     startMeter,
     stopPlayback,
+    syncMessage,
+    updateConversationStatus,
     voice,
   ]);
 
   const endCall = useCallback(() => {
     connectionAttemptRef.current += 1;
+    updateConversationStatus("completed");
     disposeResources();
     dispatch({ type: "set-status", status: "disconnected" });
-  }, [disposeResources]);
+  }, [disposeResources, updateConversationStatus]);
 
   const toggleMute = useCallback(() => {
     const nextMuted = !mutedRef.current;
@@ -586,38 +664,37 @@ export function useSplitVoice(
   const clearTranscript = useCallback(() => {
     if (typeof window !== "undefined") clearStoredTranscript(window.localStorage);
     dispatch({ type: "clear-messages" });
-  }, []);
+    void fetch("/api/conversations", {
+      method: "DELETE",
+      headers: { "X-CSRF-Token": csrfToken },
+    });
+  }, [csrfToken]);
 
   useEffect(() => {
     messagesRef.current = state.messages;
   }, [state.messages]);
 
   useEffect(() => {
-    if (!active || typeof window === "undefined") return;
+    if (typeof window === "undefined") return;
     dispatch({
       type: "load-messages",
       messages: loadTranscript(window.localStorage),
     });
     hydratedRef.current = true;
-  }, [active]);
+  }, []);
 
   useEffect(() => {
-    if (
-      !active ||
-      !hydratedRef.current ||
-      typeof window === "undefined"
-    ) {
-      return;
-    }
+    if (!hydratedRef.current || typeof window === "undefined") return;
     saveTranscript(window.localStorage, state.messages);
-  }, [active, state.messages]);
+  }, [state.messages]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      if (callStartedAtRef.current) {
-        setElapsedSeconds(
-          Math.floor((Date.now() - callStartedAtRef.current) / 1000),
-        );
+      if (!callStartedAtRef.current) return;
+      const elapsed = Math.floor((Date.now() - callStartedAtRef.current) / 1000);
+      setElapsedSeconds(elapsed);
+      if (quotaSecondsRef.current !== null) {
+        setRemainingSeconds(Math.max(0, quotaSecondsRef.current - elapsed));
       }
     }, 1000);
     return () => window.clearInterval(timer);
@@ -626,9 +703,10 @@ export function useSplitVoice(
   useEffect(
     () => () => {
       connectionAttemptRef.current += 1;
+      updateConversationStatus("interrupted");
       disposeResources();
     },
-    [disposeResources],
+    [disposeResources, updateConversationStatus],
   );
 
   const isActive = useMemo(
@@ -656,6 +734,7 @@ export function useSplitVoice(
     isActive,
     audioLevel,
     elapsedSeconds,
+    remainingSeconds,
     replyTier,
     connect,
     endCall,

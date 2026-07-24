@@ -2,18 +2,10 @@ import json
 
 import pytest
 
-from voice_worker.protocol import (
-    ConfigureEvent,
-    ProtocolError,
-    SynthesizeEvent,
-    parse_client_event,
-)
+from voice_worker.protocol import ProtocolError, SynthesizeEvent, parse_client_event
 
 
-def test_accepts_whitelisted_voice_and_bounded_tts_text() -> None:
-    assert parse_client_event('{"type":"configure","voice":"Cherry"}') == ConfigureEvent(
-        type="configure", voice="Cherry"
-    )
+def test_accepts_bounded_tts_text() -> None:
     event = parse_client_event(
         json.dumps(
             {
@@ -36,7 +28,7 @@ def test_accepts_whitelisted_voice_and_bounded_tts_text() -> None:
 @pytest.mark.parametrize(
     "raw",
     [
-        '{"type":"configure","voice":"Unknown"}',
+        '{"type":"configure","voice":"Cherry"}',
         '{"type":"synthesize","responseId":"bad id","segmentId":"x","text":"hello"}',
         '{"type":"synthesize","responseId":"r","segmentId":"s","text":""}',
         '{"type":"unknown"}',
@@ -46,4 +38,3 @@ def test_accepts_whitelisted_voice_and_bounded_tts_text() -> None:
 def test_rejects_invalid_client_events(raw: str) -> None:
     with pytest.raises(ProtocolError):
         parse_client_event(raw)
-

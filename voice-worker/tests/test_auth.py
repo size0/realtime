@@ -31,8 +31,11 @@ def token(payload: dict[str, object]) -> str:
 def test_accepts_node_compatible_token_and_rejects_replay() -> None:
     raw = token(
         {
-            "v": 1,
+            "v": 2,
             "sub": "user-123",
+            "sid": "voice-session-123",
+            "voice": "breeze",
+            "quota": 180,
             "exp": 1_700_000_060_000,
             "nonce": "abcdefghijklmnopqrstuvwx",
         }
@@ -40,6 +43,9 @@ def test_accepts_node_compatible_token_and_rejects_replay() -> None:
     verified = verify_voice_token(raw, SECRET, 1_700_000_000_000)
     assert verified is not None
     assert verified.subject == "user-123"
+    assert verified.session_id == "voice-session-123"
+    assert verified.companion_voice == "breeze"
+    assert verified.quota_seconds == 180
 
     cache = NonceCache()
     assert cache.consume(verified, 1_700_000_000_000)
@@ -49,8 +55,11 @@ def test_accepts_node_compatible_token_and_rejects_replay() -> None:
 def test_rejects_tampered_expired_and_oversized_tokens() -> None:
     raw = token(
         {
-            "v": 1,
+            "v": 2,
             "sub": "user-123",
+            "sid": "voice-session-123",
+            "voice": "nightwatch",
+            "quota": 600,
             "exp": 1_700_000_060_000,
             "nonce": "abcdefghijklmnopqrstuvwx",
         }
@@ -58,4 +67,3 @@ def test_rejects_tampered_expired_and_oversized_tokens() -> None:
     assert verify_voice_token(raw + "x", SECRET, 1_700_000_000_000) is None
     assert verify_voice_token(raw, SECRET, 1_700_000_060_000) is None
     assert verify_voice_token("x" * 3000, SECRET, 1_700_000_000_000) is None
-

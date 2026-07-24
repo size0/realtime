@@ -7,15 +7,21 @@ const projectRoot = process.cwd();
 const baseUrl = "http://127.0.0.1:3100";
 const nextCli = path.join(projectRoot, "node_modules", "next", "dist", "bin", "next");
 const playwrightCli = path.join(projectRoot, "node_modules", "@playwright", "test", "cli.js");
-const e2eDataFile = path.join(projectRoot, "test-results", "e2e-users.json");
+const resultDirectory = path.join(projectRoot, "test-results");
+const e2eDataFile = path.join(resultDirectory, "e2e-users.json");
+const e2eDatabaseFile = path.join(resultDirectory, "e2e-app.sqlite");
 const e2eEnv = {
   ...process.env,
   APP_DATA_FILE: e2eDataFile,
+  APP_DATABASE_FILE: e2eDatabaseFile,
   APP_ORIGIN: baseUrl,
   ADMIN_USERNAME: "admin",
   ADMIN_DISPLAY_NAME: "管理员",
   ADMIN_PASSWORD: "Admin-password-123",
   SESSION_SECRET: "e2e-session-secret-that-is-longer-than-32-characters",
+  VOICE_WORKER_SECRET: "e2e-worker-secret-that-is-longer-than-32-characters",
+  OAUTH_IDENTITY_SECRET: "e2e-oauth-secret-that-is-longer-than-32-characters",
+  MESSAGE_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 };
 
 function waitForExit(child) {
@@ -26,19 +32,36 @@ async function waitForServer(timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/login`);
+      const response = await fetch(`${baseUrl}/`);
       if (response.ok) return;
     } catch {
-      // The server is still starting; retry until the bounded deadline.
+      // Server is still starting.
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`Next.js did not become ready at ${baseUrl} within ${timeoutMs}ms.`);
 }
 
-await mkdir(path.dirname(e2eDataFile), { recursive: true });
-await rm(e2eDataFile, { force: true });
+async function clearE2eData() {
+  const targets = [
+    e2eDataFile,
+    e2eDatabaseFile,
+    `${e2eDatabaseFile}-wal`,
+    `${e2eDatabaseFile}-shm`,
+  ];
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      for (const target of targets) await rm(target, { force: true });
+      return;
+    } catch (error) {
+      if (error?.code !== "EBUSY" || attempt === 9) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+}
 
+await mkdir(resultDirectory, { recursive: true });
+await clearE2eData();
 const server = spawn(
   process.execPath,
   [nextCli, "dev", "--hostname", "127.0.0.1", "--port", "3100"],
@@ -61,7 +84,7 @@ try {
     new Promise((resolve) => setTimeout(resolve, 5_000)),
   ]);
   if (server.exitCode === null) server.kill("SIGKILL");
-  await rm(e2eDataFile, { force: true });
+  await clearE2eData();
 }
 
 process.exitCode = exitCode;

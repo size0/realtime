@@ -8,16 +8,20 @@ import re
 import time
 from dataclasses import dataclass
 
-TOKEN_VERSION = 1
+TOKEN_VERSION = 2
 TOKEN_TTL_MS = 60_000
 MAX_TOKEN_BYTES = 2_048
 SUBJECT_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 NONCE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+COMPANION_VOICES = {"breeze", "glow", "nightwatch"}
 
 
 @dataclass(frozen=True)
 class VoiceToken:
     subject: str
+    session_id: str
+    companion_voice: str
+    quota_seconds: int
     expires_at: int
     nonce: str
 
@@ -43,9 +47,23 @@ def verify_voice_token(
         return None
 
     subject = payload.get("sub")
+    session_id = payload.get("sid")
+    companion_voice = payload.get("voice")
+    quota_seconds = payload.get("quota")
     expires_at = payload.get("exp")
     nonce = payload.get("nonce")
     if not isinstance(subject, str) or not SUBJECT_PATTERN.fullmatch(subject):
+        return None
+    if not isinstance(session_id, str) or not SUBJECT_PATTERN.fullmatch(session_id):
+        return None
+    if companion_voice not in COMPANION_VOICES:
+        return None
+    if (
+        not isinstance(quota_seconds, int)
+        or isinstance(quota_seconds, bool)
+        or quota_seconds < 1
+        or quota_seconds > 30 * 60
+    ):
         return None
     if (
         not isinstance(expires_at, int)
@@ -56,7 +74,14 @@ def verify_voice_token(
         return None
     if not isinstance(nonce, str) or not NONCE_PATTERN.fullmatch(nonce):
         return None
-    return VoiceToken(subject=subject, expires_at=expires_at, nonce=nonce)
+    return VoiceToken(
+        subject=subject,
+        session_id=session_id,
+        companion_voice=companion_voice,
+        quota_seconds=quota_seconds,
+        expires_at=expires_at,
+        nonce=nonce,
+    )
 
 
 class NonceCache:
@@ -83,4 +108,3 @@ def _base64url(value: bytes) -> str:
 def _base64url_decode(value: str) -> bytes:
     padding = "=" * (-len(value) % 4)
     return base64.urlsafe_b64decode(value + padding)
-
