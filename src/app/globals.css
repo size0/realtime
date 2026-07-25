@@ -1378,14 +1378,30 @@ select {
 }
 
 .treehole-message {
-  position: relative;
-  margin: 0 0 20px;
-  padding-left: 13px;
-  border-left: 1px solid rgba(66, 211, 172, 0.28);
+  display: flex;
+  width: fit-content;
+  max-width: 86%;
+  margin: 0 0 14px;
+  padding: 10px 13px;
+  flex-direction: column;
+  align-items: flex-start;
+  border: 1px solid rgba(231, 184, 106, 0.14);
+  border-radius: 4px 16px 16px 16px;
+  background: rgba(231, 184, 106, 0.07);
 }
 
 .treehole-message.role-assistant {
-  border-left-color: rgba(231, 184, 106, 0.32);
+  margin-right: auto;
+}
+
+.treehole-message.role-user {
+  margin-right: 0;
+  margin-left: auto;
+  align-items: flex-end;
+  border-color: rgba(66, 211, 172, 0.2);
+  border-radius: 16px 4px 16px 16px;
+  background: rgba(66, 211, 172, 0.11);
+  text-align: right;
 }
 
 .treehole-message > span,
@@ -1403,7 +1419,12 @@ select {
   color: rgba(226, 237, 231, 0.87);
   font-size: 13px;
   line-height: 1.85;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.treehole-transcript-toggle {
+  display: none !important;
 }
 
 .treehole-message small {
@@ -1432,13 +1453,20 @@ select {
 }
 
 @media (max-width: 900px) {
+  .treehole-shell {
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
   .treehole-layout {
     grid-template-columns: 1fr;
+    min-height: calc(100dvh - 65px);
   }
 
   .treehole-stage {
-    min-height: calc(100vh - 65px);
-    padding: 38px 22px 118px;
+    min-height: calc(100dvh - 65px);
+    padding: 38px 22px calc(104px + env(safe-area-inset-bottom));
   }
 
   .treehole-stage-copy {
@@ -1456,16 +1484,25 @@ select {
     right: 0;
     bottom: 0;
     left: 0;
-    max-height: 68vh;
+    max-height: min(68dvh, 560px);
     border-top: 1px solid rgba(201, 216, 208, 0.12);
     border-left: 0;
     border-radius: 24px 24px 0 0;
-    transform: translateY(0);
+    transform: translateY(calc(100% - 78px - env(safe-area-inset-bottom)));
     transition: transform 240ms ease;
   }
 
+  .treehole-transcript.is-expanded {
+    transform: translateY(0);
+  }
+
+  .treehole-transcript.is-collapsed,
   .treehole-transcript.is-hidden {
-    transform: translateY(calc(100% - 78px));
+    transform: translateY(calc(100% - 78px - env(safe-area-inset-bottom)));
+  }
+
+  .treehole-transcript-toggle {
+    display: grid !important;
   }
 }
 
@@ -1489,18 +1526,23 @@ select {
 
   .treehole-stage {
     justify-content: flex-start;
-    min-height: calc(100vh - 64px);
-    padding-top: 34px;
+    min-height: calc(100dvh - 64px);
+    padding: 24px 18px calc(96px + env(safe-area-inset-bottom));
   }
 
   .treehole-stage-copy h1 {
-    font-size: 31px;
+    margin-top: 9px;
+    font-size: 29px;
+  }
+
+  .treehole-stage-copy p {
+    line-height: 1.6;
   }
 
   .treehole-orb-wrap {
-    width: min(300px, 78vw);
-    margin-top: 8px;
-    margin-bottom: -8px;
+    width: min(230px, 64vw);
+    margin-top: 2px;
+    margin-bottom: -4px;
   }
 
   .treehole-roles {
@@ -1508,9 +1550,15 @@ select {
   }
 
   .treehole-role {
-    min-height: 96px;
+    min-height: 82px;
     padding: 11px 9px;
     border-radius: 14px;
+  }
+
+  .treehole-role-icon {
+    width: 26px;
+    height: 26px;
+    margin-bottom: 6px;
   }
 
   .treehole-role small {
@@ -1546,7 +1594,17 @@ select {
   }
 
   .treehole-transcript {
-    padding: 23px 19px 16px;
+    padding: 20px 16px calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .treehole-message {
+    max-width: 88%;
+    padding: 9px 12px;
+  }
+
+  .treehole-message p {
+    font-size: 13px;
+    line-height: 1.7;
   }
 }
 
@@ -2628,5 +2686,73 @@ select {
   .user-toggle {
     grid-column: 1 / -1;
     width: 100%;
+  }
+}
+
+.ops-subsection-title {
+  margin-top: 10px;
+}
+
+.ops-provider-form,
+.ops-pricing-form {
+  padding-bottom: 8px;
+}
+
+.ops-provider-form .ops-wide-field {
+  grid-column: 1 / -1;
+}
+
+.ops-secret-field > span:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ops-secret-field > span:first-child small {
+  color: #8d9b95;
+  font-size: 0.68rem;
+  font-weight: 500;
+}
+
+.ops-secret-field > span:first-child small.is-configured {
+  color: #42d3ac;
+}
+
+.ops-secret-field .ops-clear-secret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  color: #c7aaa0;
+  cursor: pointer;
+  font-size: 0.72rem;
+}
+
+.ops-secret-field .ops-clear-secret input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #d58f74;
+}
+
+.ops-settings-loading {
+  margin: 12px 0 24px;
+  padding: 18px;
+  border: 1px dashed rgba(66, 211, 172, 0.22);
+  border-radius: 14px;
+  color: #91a39b;
+  text-align: center;
+}
+
+@media (max-width: 720px) {
+  .ops-provider-form .ops-wide-field {
+    grid-column: auto;
+  }
+
+  .ops-secret-field > span:first-child {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 }

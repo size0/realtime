@@ -119,9 +119,24 @@ function createSchema(db: Database.Database): void {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS voice_worker_nonces (
+      nonce TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
+      updated_by TEXT,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS provider_secrets (
+      key TEXT PRIMARY KEY,
+      ciphertext TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      auth_tag TEXT NOT NULL,
+      key_version INTEGER NOT NULL DEFAULT 1,
       updated_by TEXT,
       updated_at INTEGER NOT NULL
     );

@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Captions,
   CaptionsOff,
+  ChevronDown,
+  ChevronUp,
   History,
   Leaf,
   LockKeyhole,
@@ -71,6 +73,7 @@ export function VoiceConsole({
   defaultCompanion,
 }: VoiceConsoleProps) {
   const [showCaptions, setShowCaptions] = useState(true);
+  const [isTranscriptExpanded, setIsTranscriptExpanded] = useState(false);
   const [selectedCompanion, setSelectedCompanion] =
     useState<CompanionVoice>(defaultCompanion);
   const [showWechatTip, setShowWechatTip] = useState(false);
@@ -269,13 +272,29 @@ export function VoiceConsole({
           )}
         </section>
 
-        <aside className={`treehole-transcript ${showCaptions ? "" : "is-hidden"}`}>
+        <aside
+          className={[
+            "treehole-transcript",
+            showCaptions ? "" : "is-hidden",
+            isTranscriptExpanded ? "is-expanded" : "is-collapsed",
+          ].filter(Boolean).join(" ")}
+          data-testid="conversation-panel"
+        >
           <header>
             <div>
               <span>只属于这段夜晚</span>
               <h2><History size={18} /> 对话记录</h2>
             </div>
             <div>
+              <button
+                className="treehole-transcript-toggle"
+                type="button"
+                onClick={() => setIsTranscriptExpanded((value) => !value)}
+                aria-label={isTranscriptExpanded ? "收起对话记录" : "展开对话记录"}
+                aria-expanded={isTranscriptExpanded}
+              >
+                {isTranscriptExpanded ? <ChevronDown size={17} /> : <ChevronUp size={17} />}
+              </button>
               <button
                 type="button"
                 onClick={() => setShowCaptions((value) => !value)}
@@ -313,6 +332,7 @@ export function VoiceConsole({
                   className={`treehole-message role-${message.role}`}
                   key={message.id}
                   data-status={message.status}
+                  data-message-role={message.role}
                 >
                   <span>{message.role === "user" ? "你" : companion.name}</span>
                   <p>{message.text}</p>

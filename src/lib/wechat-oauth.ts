@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { database } from "@/lib/database";
+import { getProviderConfig } from "@/lib/provider-config";
 
 const OAUTH_TTL_MS = 10 * 60 * 1000;
 const CODE_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
@@ -24,9 +25,10 @@ export class WechatOauthError extends Error {
 }
 
 function config(): { appId: string; appSecret: string; redirectUri: string } {
-  const appId = process.env.WECHAT_OFFICIAL_ACCOUNT_APP_ID?.trim();
-  const appSecret = process.env.WECHAT_OFFICIAL_ACCOUNT_APP_SECRET?.trim();
-  const redirectUri = process.env.WECHAT_OAUTH_REDIRECT_URI?.trim();
+  const providerConfig = getProviderConfig().wechat;
+  const appId = providerConfig.appId.trim();
+  const appSecret = providerConfig.appSecret.trim();
+  const redirectUri = providerConfig.redirectUri.trim();
   if (!appId || !appSecret || !redirectUri) {
     throw new WechatOauthError("WECHAT_NOT_CONFIGURED", "微信登录尚未完成服务端配置。");
   }
@@ -55,7 +57,7 @@ function safeReturnTo(value: string): string {
 export function isWechatOauthConfigured(): boolean {
   try {
     config();
-    return process.env.WECHAT_LOGIN_ENABLED !== "false";
+    return getProviderConfig().wechat.enabled;
   } catch {
     return false;
   }

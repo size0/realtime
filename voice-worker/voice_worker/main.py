@@ -89,9 +89,9 @@ class ModelRegistry:
             vad, asr = await asyncio.gather(
                 asyncio.to_thread(
                     SileroVadEngine,
-                    self.settings.vad_threshold,
+                    self.runtime_config.vad_threshold,
                     self.runtime_config.vad_silence_ms,
-                    self.settings.speech_pad_ms,
+                    self.runtime_config.speech_pad_ms,
                 ),
                 asyncio.to_thread(SenseVoiceAsr, self.runtime_config.asr_model),
             )
@@ -127,7 +127,7 @@ class ModelRegistry:
             "ready": self.ready,
             "vad": self.vad is not None,
             "asr": self.asr is not None,
-            "ttsConfigured": bool(self.settings.dashscope_api_key),
+            "ttsConfigured": bool(self.runtime_config.dashscope_api_key),
             "loading": self.loading,
             "errorCode": self.error_code,
         }
@@ -150,13 +150,15 @@ class VoiceConnection:
         self.quota_seconds = min(token.quota_seconds, self.settings.max_session_seconds)
         self.send_lock = asyncio.Lock()
         self.asr_tasks: set[asyncio.Task[None]] = set()
+        self.asr_seconds = 0
+        self.tts_characters = 0
         companion = COMPANION_TTS[token.companion_voice]
         self.tts = QwenRealtimeTtsProvider(
-            api_key=self.settings.dashscope_api_key,
+            api_key=runtime_config.dashscope_api_key,
             model=runtime_config.tts_model,
             voice=companion.provider_voice,
             instructions=companion.instructions,
-            websocket_url=self.settings.tts_ws_url,
+            websocket_url=runtime_config.tts_ws_url,
             loop=asyncio.get_running_loop(),
         )
         if registry.vad is None:
@@ -220,6 +222,8 @@ class VoiceConnection:
                 self.subject,
                 self.session_id,
                 used_seconds,
+                asr_seconds=self.asr_seconds,
+                tts_characters=self.tts_characters,
             )
             logger.info(
                 "event=session_finished session=%s used_seconds=%d usage_reported=%s",
@@ -260,6 +264,7 @@ class VoiceConnection:
         asr = self.registry.asr
         if asr is None:
             return
+        self.asr_seconds += max(1, math.ceil(len(audio) / 2 / 16_000))
         started = time.monotonic()
         try:
             text = await asyncio.to_thread(asr.transcribe, audio)
@@ -294,6 +299,7 @@ class VoiceConnection:
                 return False
             return True
         if isinstance(event, SynthesizeEvent):
+            self.tts_characters += len(event.text)
             request = TtsRequest(
                 response_id=event.response_id,
                 segment_id=event.segment_id,
@@ -391,13 +397,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             await websocket.close(code=1013)
             return
-        if not resolved_settings.dashscope_api_key:
-            await websocket.send_json(
-                safe_error("TTS_NOT_CONFIGURED", "声音服务尚未配置。", recoverable=True)
-            )
-            await websocket.close(code=1011)
-            return
-
         async with active_lock:
             if token.subject in active_subjects:
                 await websocket.send_json(
@@ -409,6 +408,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         try:
             runtime_config = await registry.refresh_runtime_config()
+            if not runtime_config.dashscope_api_key:
+                await websocket.send_json(
+                    safe_error("TTS_NOT_CONFIGURED", "声音服务尚未配置。", recoverable=True)
+                )
+                await websocket.close(code=1011)
+                return
             await VoiceConnection(
                 websocket,
                 registry,

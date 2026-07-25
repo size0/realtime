@@ -20,6 +20,7 @@ import {
   getProductSettings,
   type ProductSettings,
 } from "@/lib/product-admin";
+import { getProviderConfig } from "@/lib/provider-config";
 
 export const runtime = "nodejs";
 
@@ -147,18 +148,14 @@ function validModels(models: string[]): boolean {
 
 function resolveStrongProvider(
   settings: ProductSettings,
-  workspaceId?: string,
-  region?: QwenRegion,
 ): ReasoningProvider | null {
-  const apiKey =
-    process.env.STRONG_REASONING_API_KEY?.trim() ||
-    process.env.REASONING_API_KEY?.trim() ||
-    process.env.DASHSCOPE_API_KEY?.trim();
-  const configuredBase =
-    process.env.STRONG_REASONING_BASE_URL?.trim() ||
-    process.env.REASONING_BASE_URL?.trim() ||
-    process.env.DASHSCOPE_TEXT_BASE_URL?.trim();
-  const baseUrl = createTextBaseUrl(configuredBase, workspaceId, region);
+  const config = getProviderConfig();
+  const apiKey = config.strongModel.apiKey.trim();
+  const baseUrl = createTextBaseUrl(
+    config.strongModel.baseUrl,
+    config.dashscope.workspaceId,
+    config.dashscope.region,
+  );
   if (!apiKey || !baseUrl) return null;
 
   const models = [
@@ -171,16 +168,14 @@ function resolveStrongProvider(
 
 function resolveEconomyProvider(
   settings: ProductSettings,
-  workspaceId?: string,
-  region?: QwenRegion,
 ): ReasoningProvider | null {
-  const apiKey =
-    process.env.ECONOMY_REASONING_API_KEY?.trim() ||
-    process.env.DASHSCOPE_API_KEY?.trim();
-  const configuredBase =
-    process.env.ECONOMY_REASONING_BASE_URL?.trim() ||
-    process.env.DASHSCOPE_TEXT_BASE_URL?.trim();
-  const baseUrl = createTextBaseUrl(configuredBase, workspaceId, region);
+  const config = getProviderConfig();
+  const apiKey = config.economyModel.apiKey.trim();
+  const baseUrl = createTextBaseUrl(
+    config.economyModel.baseUrl,
+    config.dashscope.workspaceId,
+    config.dashscope.region,
+  );
   if (!apiKey || !baseUrl) return null;
 
   const models = [
@@ -333,9 +328,9 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const workspaceId = process.env.DASHSCOPE_WORKSPACE_ID?.trim();
-  const regionValue = process.env.DASHSCOPE_REGION?.trim() || "cn-beijing";
-  let region: QwenRegion | undefined;
+  const providerConfig = getProviderConfig();
+  const workspaceId = providerConfig.dashscope.workspaceId.trim();
+  const regionValue = providerConfig.dashscope.region;
   if (workspaceId) {
     if (!isValidWorkspaceId(workspaceId)) {
       return errorResponse("INVALID_SERVER_CONFIG", "百炼业务空间 ID 格式无效。", 503);
@@ -343,7 +338,6 @@ export async function POST(request: Request): Promise<Response> {
     if (regionValue !== "cn-beijing" && regionValue !== "ap-southeast-1") {
       return errorResponse("INVALID_SERVER_CONFIG", "百炼地域配置无效。", 503);
     }
-    region = regionValue;
   }
 
   let parsedBody: ReplyRequestBody | null = null;
@@ -377,8 +371,8 @@ export async function POST(request: Request): Promise<Response> {
       ? classifyReplyTier(parsedBody.question, parsedBody.history)
       : "strong";
   const productSettings = getProductSettings();
-  const economyProvider = resolveEconomyProvider(productSettings, workspaceId, region);
-  const strongProvider = resolveStrongProvider(productSettings, workspaceId, region);
+  const economyProvider = resolveEconomyProvider(productSettings);
+  const strongProvider = resolveStrongProvider(productSettings);
   const providers =
     requestedTier === "economy"
       ? [economyProvider ?? strongProvider].filter(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -40,11 +40,53 @@ interface AuditLog {
   createdAt: number;
 }
 
+interface SecretConfigView {
+  configured: boolean;
+  last4: string | null;
+}
+
+interface ProviderConfigView {
+  wechat: {
+    enabled: boolean;
+    appId: string;
+    redirectUri: string;
+    appSecret: SecretConfigView;
+  };
+  economyModel: {
+    provider: string;
+    baseUrl: string;
+    apiKey: SecretConfigView;
+  };
+  strongModel: {
+    provider: string;
+    baseUrl: string;
+    apiKey: SecretConfigView;
+  };
+  dashscope: {
+    workspaceId: string;
+    region: "cn-beijing" | "ap-southeast-1";
+    ttsWsUrl: string;
+    apiKey: SecretConfigView;
+  };
+  pricing: {
+    asrPerHour: number;
+    ttsPer10kChars: number;
+    economyInputPerMillionTokens: number;
+    economyOutputPerMillionTokens: number;
+    strongInputPerMillionTokens: number;
+    strongOutputPerMillionTokens: number;
+    realtimeAudioInputPerMillionTokens: number;
+    realtimeAudioOutputPerMillionTokens: number;
+    currency: "CNY";
+  };
+}
+
 interface AdminConsoleProps {
   initialUsers: PublicUser[];
   initialConversations: ConversationSummary[];
   initialAuditLogs: AuditLog[];
   initialSettings: ProductSettings;
+  initialProviders: ProviderConfigView;
   initialPromptVersions: PromptVersion[];
   currentUserId: string;
   csrfToken: string;
@@ -100,6 +142,7 @@ export function AdminConsole({
   initialConversations,
   initialAuditLogs,
   initialSettings,
+  initialProviders,
   initialPromptVersions,
   currentUserId,
   csrfToken,
@@ -121,6 +164,42 @@ export function AdminConsole({
   const [submitting, setSubmitting] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingPrompt, setSavingPrompt] = useState(false);
+  const [providers, setProviders] = useState<ProviderConfigView | null>(
+    initialProviders,
+  );
+  const [loadingProviders, setLoadingProviders] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== "settings" || providers || loadingProviders) return;
+
+    const controller = new AbortController();
+    const loadProviders = async () => {
+      setLoadingProviders(true);
+      try {
+        const response = await fetch("/api/admin/settings", {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(await readError(response));
+        const payload = (await response.json()) as {
+          settings?: ProductSettings;
+          providers?: ProviderConfigView;
+        };
+        if (payload.settings) setSettings(payload.settings);
+        if (!payload.providers) throw new Error("供应商配置暂不可用。");
+        setProviders(payload.providers);
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setErrorMessage(
+          error instanceof Error ? error.message : "读取供应商配置失败。",
+        );
+      } finally {
+        setLoadingProviders(false);
+      }
+    };
+
+    void loadProviders();
+    return () => controller.abort();
+  }, [activeTab, loadingProviders, providers]);
 
   const totals = useMemo(
     () => ({
@@ -206,7 +285,18 @@ export function AdminConsole({
     if (savingSettings) return;
     setSavingSettings(true);
     setErrorMessage(null);
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const text = (name: string) => String(form.get(name) ?? "").trim();
+    const secretUpdate = (
+      valueName: string,
+      clearName: string,
+    ): { action: "keep" | "clear" } | { action: "replace"; value: string } => {
+      const value = text(valueName);
+      if (value) return { action: "replace", value };
+      if (form.get(clearName) === "on") return { action: "clear" };
+      return { action: "keep" };
+    };
     try {
       const response = await fetch("/api/admin/settings", {
         method: "PATCH",
@@ -218,6 +308,8 @@ export function AdminConsole({
           guestTrialSeconds: Number(form.get("guestTrialSeconds")),
           wechatDailySeconds: Number(form.get("wechatDailySeconds")),
           vadSilenceMs: Number(form.get("vadSilenceMs")),
+          vadThreshold: Number(form.get("vadThreshold")),
+          speechPadMs: Number(form.get("speechPadMs")),
           defaultCompanion: form.get("defaultCompanion"),
           economyModel: form.get("economyModel"),
           economyFallbackModel: form.get("economyFallbackModel"),
@@ -229,11 +321,77 @@ export function AdminConsole({
           ttsModel: form.get("ttsModel"),
           highFidelityEnabled: form.get("highFidelityEnabled") === "true",
           highFidelityModel: form.get("highFidelityModel"),
+          providerConfig: {
+            wechat: {
+              enabled: form.get("wechatEnabled") === "true",
+              appId: text("wechatAppId"),
+              redirectUri: text("wechatRedirectUri"),
+              appSecret: secretUpdate(
+                "wechatAppSecret",
+                "clearWechatAppSecret",
+              ),
+            },
+            economyModel: {
+              provider: text("economyProvider"),
+              baseUrl: text("economyBaseUrl"),
+              apiKey: secretUpdate("economyApiKey", "clearEconomyApiKey"),
+            },
+            strongModel: {
+              provider: text("strongProvider"),
+              baseUrl: text("strongBaseUrl"),
+              apiKey: secretUpdate("strongApiKey", "clearStrongApiKey"),
+            },
+            dashscope: {
+              workspaceId: text("dashscopeWorkspaceId"),
+              region: text("dashscopeRegion"),
+              ttsWsUrl: text("dashscopeTtsWsUrl"),
+              apiKey: secretUpdate("dashscopeApiKey", "clearDashscopeApiKey"),
+            },
+            pricing: {
+              asrPerHour: Number(form.get("asrPerHour")),
+              ttsPer10kChars: Number(form.get("ttsPer10kChars")),
+              economyInputPerMillionTokens: Number(
+                form.get("economyInputPerMillionTokens"),
+              ),
+              economyOutputPerMillionTokens: Number(
+                form.get("economyOutputPerMillionTokens"),
+              ),
+              strongInputPerMillionTokens: Number(
+                form.get("strongInputPerMillionTokens"),
+              ),
+              strongOutputPerMillionTokens: Number(
+                form.get("strongOutputPerMillionTokens"),
+              ),
+              realtimeAudioInputPerMillionTokens: Number(
+                form.get("realtimeAudioInputPerMillionTokens"),
+              ),
+              realtimeAudioOutputPerMillionTokens: Number(
+                form.get("realtimeAudioOutputPerMillionTokens"),
+              ),
+              currency: "CNY",
+            },
+          },
         }),
       });
       if (!response.ok) throw new Error(await readError(response));
-      const payload = (await response.json()) as { settings: ProductSettings };
+      const payload = (await response.json()) as {
+        settings: ProductSettings;
+        providers?: ProviderConfigView;
+      };
       setSettings(payload.settings);
+      if (payload.providers) {
+        setProviders(payload.providers);
+        formElement
+          .querySelectorAll<HTMLInputElement>('input[type="password"]')
+          .forEach((input) => {
+            input.value = "";
+          });
+        formElement
+          .querySelectorAll<HTMLInputElement>(".ops-clear-secret input")
+          .forEach((input) => {
+            input.checked = false;
+          });
+      }
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "保存产品设置失败。");
     } finally {
@@ -423,6 +581,8 @@ export function AdminConsole({
               <div className="ops-panel-title"><div><Gauge size={18} /><h2>当前生产参数</h2></div></div>
               <div className="ops-settings-form">
                 <label><span>静音断句（毫秒）</span><input name="vadSilenceMs" type="number" min={500} max={3000} defaultValue={settings.vadSilenceMs} /></label>
+                <label><span>人声检测阈值</span><input name="vadThreshold" type="number" min={0.1} max={0.95} step="0.01" defaultValue={settings.vadThreshold} /></label>
+                <label><span>语音前后补帧（毫秒）</span><input name="speechPadMs" type="number" min={0} max={1000} defaultValue={settings.speechPadMs} /></label>
                 <label><span>访客体验（秒）</span><input name="guestTrialSeconds" type="number" min={30} max={600} defaultValue={settings.guestTrialSeconds} /></label>
                 <label><span>微信每日额度（秒）</span><input name="wechatDailySeconds" type="number" min={60} max={3600} defaultValue={settings.wechatDailySeconds} /></label>
                 <label><span>默认陪伴角色</span><select name="defaultCompanion" defaultValue={settings.defaultCompanion}>{COMPANION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.name}</option>)}</select></label>
@@ -443,9 +603,70 @@ export function AdminConsole({
                 <label><span>高保真链路</span><select name="highFidelityEnabled" defaultValue={String(settings.highFidelityEnabled)}><option value="false">关闭（生产默认）</option><option value="true">仅后台测试时开启</option></select></label>
                 <label><span>高保真实时模型</span><select name="highFidelityModel" defaultValue={settings.highFidelityModel}><option value="qwen3.5-omni-flash-realtime">Qwen3.5 Omni Flash Realtime</option><option value="qwen3.5-omni-plus-realtime">Qwen3.5 Omni Plus Realtime</option></select></label>
               </div>
-              <button className="ops-save-button" type="submit" disabled={savingSettings}>{savingSettings ? "保存中…" : "保存产品参数"}</button>
-              <p className="ops-secret-note">API Key、AppSecret、加密密钥和供应商地址只存在于服务器环境变量，后台不会显示。</p>
-              <p className="ops-secret-note">额度与回答模型立即生效；ASR 模型变更需要语音 Worker 重启，其余语音参数在下一次连接生效。</p>
+              <div className="ops-panel-title"><div><ShieldCheck size={18} /><h2>公众号登录</h2></div><span>密钥留空即保留原值</span></div>
+              {loadingProviders || !providers ? (
+                <div className="ops-settings-loading" role="status">正在读取供应商配置…</div>
+              ) : (
+                <>
+                  <div className="ops-settings-form ops-provider-form">
+                    <label>
+                      <span>微信内自动登录</span>
+                      <select name="wechatEnabled" defaultValue={String(providers.wechat.enabled)}>
+                        <option value="false">关闭</option>
+                        <option value="true">开启</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>公众号 AppID</span>
+                      <input name="wechatAppId" type="text" maxLength={64} defaultValue={providers.wechat.appId} autoComplete="off" />
+                    </label>
+                    <label className="ops-wide-field">
+                      <span>OAuth 回调地址</span>
+                      <input name="wechatRedirectUri" type="url" maxLength={512} defaultValue={providers.wechat.redirectUri} placeholder="https://voice.example.com/api/auth/wechat/callback" autoComplete="off" />
+                    </label>
+                    <SecretField label="公众号 AppSecret" name="wechatAppSecret" clearName="clearWechatAppSecret" secret={providers.wechat.appSecret} />
+                  </div>
+
+                  <div className="ops-panel-title ops-subsection-title"><div><MessageCircleMore size={18} /><h2>文本模型供应商</h2></div><span>分别配置日常与强模型</span></div>
+                  <div className="ops-settings-form ops-provider-form">
+                    <label><span>经济模型供应商</span><input name="economyProvider" type="text" maxLength={64} defaultValue={providers.economyModel.provider} autoComplete="off" /></label>
+                    <label><span>经济模型 Base URL</span><input name="economyBaseUrl" type="url" maxLength={512} defaultValue={providers.economyModel.baseUrl} placeholder="https://example.com/v1" autoComplete="off" /></label>
+                    <SecretField label="经济模型 API Key" name="economyApiKey" clearName="clearEconomyApiKey" secret={providers.economyModel.apiKey} />
+                    <label><span>强模型供应商</span><input name="strongProvider" type="text" maxLength={64} defaultValue={providers.strongModel.provider} autoComplete="off" /></label>
+                    <label><span>强模型 Base URL</span><input name="strongBaseUrl" type="url" maxLength={512} defaultValue={providers.strongModel.baseUrl} placeholder="https://example.com/v1" autoComplete="off" /></label>
+                    <SecretField label="强模型 API Key" name="strongApiKey" clearName="clearStrongApiKey" secret={providers.strongModel.apiKey} />
+                  </div>
+
+                  <div className="ops-panel-title ops-subsection-title"><div><Activity size={18} /><h2>千问语音供应商</h2></div><span>下一次语音连接生效</span></div>
+                  <div className="ops-settings-form ops-provider-form">
+                    <SecretField label="千问 API Key" name="dashscopeApiKey" clearName="clearDashscopeApiKey" secret={providers.dashscope.apiKey} />
+                    <label><span>Workspace ID（可选）</span><input name="dashscopeWorkspaceId" type="text" maxLength={128} defaultValue={providers.dashscope.workspaceId} autoComplete="off" /></label>
+                    <label>
+                      <span>服务地域</span>
+                      <select name="dashscopeRegion" defaultValue={providers.dashscope.region}>
+                        <option value="cn-beijing">中国内地（北京）</option>
+                        <option value="ap-southeast-1">国际（新加坡）</option>
+                      </select>
+                    </label>
+                    <label className="ops-wide-field"><span>TTS WebSocket 地址</span><input name="dashscopeTtsWsUrl" type="url" maxLength={512} defaultValue={providers.dashscope.ttsWsUrl} placeholder="wss://dashscope.aliyuncs.com/api-ws/v1/realtime" autoComplete="off" /></label>
+                  </div>
+
+                  <div className="ops-panel-title ops-subsection-title"><div><Gauge size={18} /><h2>供应商价格</h2></div><span>人民币，用于成本估算</span></div>
+                  <div className="ops-settings-form ops-pricing-form">
+                    <label><span>ASR / 小时（CNY）</span><input name="asrPerHour" type="number" min={0} step="0.0001" defaultValue={providers.pricing.asrPerHour} /></label>
+                    <label><span>TTS / 万字（CNY）</span><input name="ttsPer10kChars" type="number" min={0} step="0.0001" defaultValue={providers.pricing.ttsPer10kChars} /></label>
+                    <label><span>经济模型输入 / 百万 Token（CNY）</span><input name="economyInputPerMillionTokens" type="number" min={0} step="0.0001" defaultValue={providers.pricing.economyInputPerMillionTokens} /></label>
+                    <label><span>经济模型输出 / 百万 Token（CNY）</span><input name="economyOutputPerMillionTokens" type="number" min={0} step="0.0001" defaultValue={providers.pricing.economyOutputPerMillionTokens} /></label>
+                    <label><span>强模型输入 / 百万 Token（CNY）</span><input name="strongInputPerMillionTokens" type="number" min={0} step="0.0001" defaultValue={providers.pricing.strongInputPerMillionTokens} /></label>
+                    <label><span>强模型输出 / 百万 Token（CNY）</span><input name="strongOutputPerMillionTokens" type="number" min={0} step="0.0001" defaultValue={providers.pricing.strongOutputPerMillionTokens} /></label>
+                    <label><span>实时音频输入 / 百万 Token（CNY）</span><input name="realtimeAudioInputPerMillionTokens" type="number" min={0} step="0.0001" defaultValue={providers.pricing.realtimeAudioInputPerMillionTokens} /></label>
+                    <label><span>实时音频输出 / 百万 Token（CNY）</span><input name="realtimeAudioOutputPerMillionTokens" type="number" min={0} step="0.0001" defaultValue={providers.pricing.realtimeAudioOutputPerMillionTokens} /></label>
+                  </div>
+                </>
+              )}
+              <button className="ops-save-button" type="submit" disabled={savingSettings || loadingProviders || !providers}>{savingSettings ? "保存中…" : "保存产品与供应商配置"}</button>
+              <p className="ops-secret-note">API Key 与 AppSecret 仅加密保存在服务器端；后台只显示配置状态和密钥尾号，输入框不会回填现有密钥。加密主密钥仍只存在于服务器环境变量。</p>
+              <p className="ops-secret-note">额度、回答模型和价格保存后立即生效；语音供应商参数在下一次连接生效，ASR 本地模型变更仍需重启语音 Worker。</p>
             </form>
           </>
         )}
@@ -517,5 +738,44 @@ export function AdminConsole({
         </div>
       )}
     </main>
+  );
+}
+
+function SecretField({
+  label,
+  name,
+  clearName,
+  secret,
+}: {
+  label: string;
+  name: string;
+  clearName: string;
+  secret: SecretConfigView;
+}) {
+  return (
+    <label className="ops-secret-field">
+      <span>
+        {label}
+        <small className={secret.configured ? "is-configured" : ""}>
+          {secret.configured
+            ? `已配置${secret.last4 ? `（尾号 ${secret.last4}）` : ""}`
+            : "未配置"}
+        </small>
+      </span>
+      <input
+        name={name}
+        type="password"
+        maxLength={512}
+        defaultValue=""
+        placeholder={secret.configured ? "留空保留，输入新值可替换" : "输入密钥"}
+        autoComplete="new-password"
+      />
+      {secret.configured && (
+        <span className="ops-clear-secret">
+          <input name={clearName} type="checkbox" />
+          清除当前密钥
+        </span>
+      )}
+    </label>
   );
 }

@@ -10,6 +10,7 @@ import {
 } from "@/lib/realtime-session";
 import { DEFAULT_REALTIME_VOICE } from "@/lib/qwen-session";
 import { getProductSettings } from "@/lib/product-admin";
+import { getProviderConfig } from "@/lib/provider-config";
 
 export const runtime = "nodejs";
 
@@ -109,12 +110,13 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const apiKey = process.env.DASHSCOPE_API_KEY;
+  const providerConfig = getProviderConfig();
+  const apiKey = providerConfig.dashscope.apiKey.trim();
   if (!apiKey) {
     return errorResponse("MISSING_API_KEY", "服务端尚未配置百炼 API Key。", 503);
   }
 
-  const workspaceId = process.env.DASHSCOPE_WORKSPACE_ID?.trim();
+  const workspaceId = providerConfig.dashscope.workspaceId.trim();
   if (!workspaceId) {
     return errorResponse(
       "MISSING_WORKSPACE_ID",
@@ -131,7 +133,7 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("INVALID_SERVER_CONFIG", "千问 Realtime 模型配置无效。", 503);
   }
 
-  const regionValue = process.env.DASHSCOPE_REGION?.trim() || "cn-beijing";
+  const regionValue = providerConfig.dashscope.region;
   if (regionValue !== "cn-beijing" && regionValue !== "ap-southeast-1") {
     return errorResponse("INVALID_SERVER_CONFIG", "百炼地域配置无效。", 503);
   }

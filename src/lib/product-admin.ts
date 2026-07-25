@@ -18,6 +18,8 @@ export interface ProductSettings {
   guestTrialSeconds: number;
   wechatDailySeconds: number;
   vadSilenceMs: number;
+  vadThreshold: number;
+  speechPadMs: number;
   defaultCompanion: CompanionVoice;
   economyModel: string;
   economyFallbackModel: string;
@@ -72,6 +74,8 @@ function defaultSettings(): ProductSettings {
     guestTrialSeconds: 180,
     wechatDailySeconds: 600,
     vadSilenceMs: 1100,
+    vadThreshold: environmentNumber("VOICE_VAD_THRESHOLD", 0.5, 0.1, 0.95),
+    speechPadMs: environmentNumber("VOICE_SPEECH_PAD_MS", 160, 0, 1000),
     defaultCompanion: "breeze",
     economyModel: environmentModel(
       [process.env.ECONOMY_REASONING_MODEL],
@@ -118,6 +122,18 @@ function defaultSettings(): ProductSettings {
   };
 }
 
+function environmentNumber(
+  key: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = Number(process.env[key]);
+  return Number.isFinite(value) && value >= minimum && value <= maximum
+    ? value
+    : fallback;
+}
+
 function readSetting(key: string): unknown {
   const row = database().prepare("SELECT value FROM app_settings WHERE key = ?")
     .get(key) as { value: string } | undefined;
@@ -137,6 +153,20 @@ function boundedNumber(
 ): number {
   return typeof value === "number" &&
     Number.isInteger(value) &&
+    value >= minimum &&
+    value <= maximum
+    ? value
+    : fallback;
+}
+
+function boundedDecimal(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
     value >= minimum &&
     value <= maximum
     ? value
@@ -177,6 +207,18 @@ export function getProductSettings(): ProductSettings {
       500,
       3000,
     ),
+    vadThreshold: boundedDecimal(
+      readSetting("vad_threshold"),
+      defaults.vadThreshold,
+      0.1,
+      0.95,
+    ),
+    speechPadMs: boundedNumber(
+      readSetting("speech_pad_ms"),
+      defaults.speechPadMs,
+      0,
+      1000,
+    ),
     defaultCompanion: isCompanionVoice(defaultCompanion)
       ? defaultCompanion
       : defaults.defaultCompanion,
@@ -210,10 +252,7 @@ export function getProductSettings(): ProductSettings {
   };
 }
 
-export function updateProductSettings(
-  adminId: string,
-  input: Partial<ProductSettings>,
-): ProductSettings {
+export function validateProductSettings(input: Partial<ProductSettings>): void {
   if (
     (input.guestTrialSeconds !== undefined &&
       (!Number.isInteger(input.guestTrialSeconds) ||
@@ -227,6 +266,14 @@ export function updateProductSettings(
       (!Number.isInteger(input.vadSilenceMs) ||
         input.vadSilenceMs < 500 ||
         input.vadSilenceMs > 3000)) ||
+    (input.vadThreshold !== undefined &&
+      (!Number.isFinite(input.vadThreshold) ||
+        input.vadThreshold < 0.1 ||
+        input.vadThreshold > 0.95)) ||
+    (input.speechPadMs !== undefined &&
+      (!Number.isInteger(input.speechPadMs) ||
+        input.speechPadMs < 0 ||
+        input.speechPadMs > 1000)) ||
     (input.defaultCompanion !== undefined &&
       !isCompanionVoice(input.defaultCompanion)) ||
     (input.economyModel !== undefined &&
@@ -252,6 +299,13 @@ export function updateProductSettings(
   ) {
     throw new Error("Invalid product settings.");
   }
+}
+
+export function updateProductSettings(
+  adminId: string,
+  input: Partial<ProductSettings>,
+): ProductSettings {
+  validateProductSettings(input);
   const current = getProductSettings();
   const next: ProductSettings = {
     guestTrialSeconds: boundedNumber(
@@ -271,6 +325,18 @@ export function updateProductSettings(
       current.vadSilenceMs,
       500,
       3000,
+    ),
+    vadThreshold: boundedDecimal(
+      input.vadThreshold,
+      current.vadThreshold,
+      0.1,
+      0.95,
+    ),
+    speechPadMs: boundedNumber(
+      input.speechPadMs,
+      current.speechPadMs,
+      0,
+      1000,
     ),
     defaultCompanion: isCompanionVoice(input.defaultCompanion)
       ? input.defaultCompanion
@@ -304,6 +370,8 @@ export function updateProductSettings(
     statement.run("guest_trial_seconds", JSON.stringify(next.guestTrialSeconds), adminId, now);
     statement.run("wechat_daily_seconds", JSON.stringify(next.wechatDailySeconds), adminId, now);
     statement.run("vad_silence_ms", JSON.stringify(next.vadSilenceMs), adminId, now);
+    statement.run("vad_threshold", JSON.stringify(next.vadThreshold), adminId, now);
+    statement.run("speech_pad_ms", JSON.stringify(next.speechPadMs), adminId, now);
     statement.run("default_companion", JSON.stringify(next.defaultCompanion), adminId, now);
     statement.run("economy_model", JSON.stringify(next.economyModel), adminId, now);
     statement.run("economy_fallback_model", JSON.stringify(next.economyFallbackModel), adminId, now);

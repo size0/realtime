@@ -87,7 +87,7 @@ test("keeps the admin login hidden and opens the five backend modules", async ({
   await page.getByRole("button", { name: "产品设置" }).click();
   await expect(page.getByLabel("访客体验（秒）")).toHaveValue("180");
   await expect(page.getByLabel("微信每日额度（秒）")).toHaveValue("600");
-  await expect(page.getByText(/API Key、AppSecret/)).toBeVisible();
+  await expect(page.getByText(/API Key.*AppSecret/)).toBeVisible();
 });
 
 test("shows model routing and TTS configuration in the admin console", async ({ page }) => {
@@ -103,4 +103,95 @@ test("shows model routing and TTS configuration in the admin console", async ({ 
   await expect(page.getByLabel("朗读模型")).toHaveValue(
     "qwen3-tts-instruct-flash-realtime",
   );
+  await expect(page.getByText("公众号登录")).toBeVisible();
+  await expect(page.getByLabel("微信内自动登录")).toBeVisible();
+  await expect(page.getByLabel("公众号 AppID")).toBeVisible();
+  await expect(page.getByLabel("OAuth 回调地址")).toBeVisible();
+  await expect(page.getByLabel("公众号 AppSecret")).toHaveValue("");
+  await expect(page.getByLabel("经济模型 Base URL")).toBeVisible();
+  await expect(page.getByLabel("经济模型 API Key")).toHaveValue("");
+  await expect(page.getByLabel("强模型 Base URL")).toBeVisible();
+  await expect(page.getByLabel("强模型 API Key")).toHaveValue("");
+  await expect(page.getByLabel("千问 API Key")).toHaveValue("");
+  await expect(page.getByLabel("Workspace ID（可选）")).toBeVisible();
+  await expect(page.getByLabel("服务地域")).toBeVisible();
+  await expect(page.getByLabel("TTS WebSocket 地址")).toBeVisible();
+  await expect(page.getByText("供应商价格")).toBeVisible();
+  await expect(page.getByLabel("ASR / 小时（CNY）")).toBeVisible();
+  await expect(page.getByLabel("TTS / 万字（CNY）")).toBeVisible();
+  await expect(
+    page.getByLabel("实时音频输出 / 百万 Token（CNY）"),
+  ).toBeVisible();
+});
+
+test.describe("mobile conversation layout", () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  });
+
+  test("keeps the start action clear and shows left-right message bubbles", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "realtime-voice.transcript.v1",
+        JSON.stringify({
+          version: 1,
+          messages: [
+            {
+              id: "mobile-user-message",
+              role: "user",
+              text: "今天有点累。",
+              status: "complete",
+              createdAt: 1,
+            },
+            {
+              id: "mobile-assistant-message",
+              role: "assistant",
+              text: "慢慢说，我在听。",
+              status: "complete",
+              createdAt: 2,
+            },
+          ],
+        }),
+      );
+    });
+
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+
+    const startAction = page.locator(".treehole-start");
+    const transcript = page.getByTestId("conversation-panel");
+    await expect(startAction).toBeVisible();
+    await expect(startAction).toBeInViewport();
+
+    const [startBox, collapsedTranscriptBox] = await Promise.all([
+      startAction.boundingBox(),
+      transcript.boundingBox(),
+    ]);
+    expect(startBox).not.toBeNull();
+    expect(collapsedTranscriptBox).not.toBeNull();
+    expect(startBox!.y + startBox!.height).toBeLessThanOrEqual(
+      collapsedTranscriptBox!.y,
+    );
+
+    await page.locator(".treehole-transcript-toggle").click();
+    await expect(page.locator(".treehole-transcript-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    const userMessage = transcript.locator('[data-message-role="user"]');
+    const assistantMessage = transcript.locator('[data-message-role="assistant"]');
+    await expect(userMessage).toBeVisible();
+    await expect(assistantMessage).toBeVisible();
+
+    const [userBox, assistantBox] = await Promise.all([
+      userMessage.boundingBox(),
+      assistantMessage.boundingBox(),
+    ]);
+    expect(userBox).not.toBeNull();
+    expect(assistantBox).not.toBeNull();
+    expect(userBox!.x).toBeGreaterThan(assistantBox!.x);
+  });
 });

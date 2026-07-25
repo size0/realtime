@@ -10,6 +10,7 @@ import {
   getProductSettings,
   listPromptVersions,
 } from "@/lib/product-admin";
+import { getProviderConfigView } from "@/lib/provider-config";
 
 export default async function AdminPage() {
   const session = await getCurrentSession();
@@ -21,6 +22,7 @@ export default async function AdminPage() {
       initialConversations={listAdminConversations()}
       initialAuditLogs={listAdminAuditLogs()}
       initialSettings={getProductSettings()}
+      initialProviders={getProviderConfigView()}
       initialPromptVersions={listPromptVersions()}
       currentUserId={session.user.id}
       csrfToken={session.csrfToken}
