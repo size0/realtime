@@ -5,12 +5,16 @@ const authMocks = vi.hoisted(() => ({
   getRequestSession: vi.fn(),
   recordUsage: vi.fn(),
   usageAllowance: vi.fn(),
+  getProductSettings: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({ getRequestSession: authMocks.getRequestSession }));
 vi.mock("@/lib/auth-store", () => ({
   recordUsage: authMocks.recordUsage,
   usageAllowance: authMocks.usageAllowance,
+}));
+vi.mock("@/lib/product-admin", () => ({
+  getProductSettings: authMocks.getProductSettings,
 }));
 
 import { POST } from "@/app/api/realtime/connect/route";
@@ -57,6 +61,11 @@ describe("POST /api/realtime/connect", () => {
     });
     authMocks.recordUsage.mockResolvedValue(undefined);
     authMocks.usageAllowance.mockReturnValue({ allowed: true, limit: null, used: 0 });
+    authMocks.getProductSettings.mockImplementation(() => ({
+      highFidelityEnabled: true,
+      highFidelityModel:
+        process.env.DASHSCOPE_REALTIME_MODEL || "qwen3.5-omni-flash-realtime",
+    }));
     clearEnvironment();
   });
 
@@ -82,6 +91,19 @@ describe("POST /api/realtime/connect", () => {
     process.env.DASHSCOPE_API_KEY = "sk-test-secret";
     const missingWorkspace = await POST(makeRequest({ ip: "127.0.0.2" }));
     expect(missingWorkspace.status).toBe(503);
+  });
+
+  it("keeps the high-fidelity route disabled until an admin enables it", async () => {
+    authMocks.getProductSettings.mockReturnValueOnce({
+      highFidelityEnabled: false,
+      highFidelityModel: "qwen3.5-omni-flash-realtime",
+    });
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "HIGH_FIDELITY_DISABLED" },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects malformed SDP", async () => {

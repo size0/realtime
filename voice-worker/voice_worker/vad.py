@@ -51,8 +51,14 @@ class SileroVadEngine:
             "speech_pad_ms": speech_pad_ms,
         }
 
-    def create_session(self) -> "AudioTurnDetector":
-        iterator = self._iterator_class(self._model, **self._settings)
+    def create_session(
+        self,
+        min_silence_duration_ms: int | None = None,
+    ) -> "AudioTurnDetector":
+        settings = dict(self._settings)
+        if min_silence_duration_ms is not None:
+            settings["min_silence_duration_ms"] = min_silence_duration_ms
+        iterator = self._iterator_class(self._model, **settings)
 
         def process(frame: bytes) -> dict[str, int] | None:
             import numpy as np
@@ -109,4 +115,3 @@ class AudioTurnDetector:
         self._speaking = False
         if self._reset_iterator:
             self._reset_iterator()
-

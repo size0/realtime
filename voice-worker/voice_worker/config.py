@@ -14,6 +14,7 @@ class Settings:
     tts_ws_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     dashscope_api_key: str = ""
     usage_report_url: str = ""
+    voice_config_url: str = ""
     vad_threshold: float = 0.5
     min_silence_duration_ms: int = 1100
     speech_pad_ms: int = 160
@@ -58,6 +59,10 @@ class Settings:
             usage_report_url=os.environ.get(
                 "VOICE_USAGE_REPORT_URL",
                 f"{app_origin}/api/internal/voice-usage",
+            ).strip(),
+            voice_config_url=os.environ.get(
+                "VOICE_CONFIG_URL",
+                f"{app_origin}/api/internal/voice-config",
             ).strip(),
             vad_threshold=threshold,
             min_silence_duration_ms=min_silence,

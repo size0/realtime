@@ -16,15 +16,16 @@ import {
   updateConversation,
 } from "@/lib/conversation-store";
 import { isValidWorkspaceId, type QwenRegion } from "@/lib/realtime-session";
+import {
+  getProductSettings,
+  type ProductSettings,
+} from "@/lib/product-admin";
 
 export const runtime = "nodejs";
 
 const MAX_REQUEST_BYTES = 48 * 1024;
 const STRONG_UPSTREAM_TIMEOUT_MS = 20_000;
 const ECONOMY_UPSTREAM_TIMEOUT_MS = 12_000;
-const DEFAULT_STRONG_MODEL = "qwen3.7-max";
-const DEFAULT_STRONG_FALLBACK_MODEL = "qwen3.7-plus";
-const DEFAULT_ECONOMY_MODEL = "qwen3.5-flash";
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{1,127}$/;
 
 const SYSTEM_PROMPT = [
@@ -145,6 +146,7 @@ function validModels(models: string[]): boolean {
 }
 
 function resolveStrongProvider(
+  settings: ProductSettings,
   workspaceId?: string,
   region?: QwenRegion,
 ): ReasoningProvider | null {
@@ -159,35 +161,16 @@ function resolveStrongProvider(
   const baseUrl = createTextBaseUrl(configuredBase, workspaceId, region);
   if (!apiKey || !baseUrl) return null;
 
-  const hasDedicatedProvider = Boolean(
-    process.env.STRONG_REASONING_API_KEY?.trim() ||
-      process.env.STRONG_REASONING_BASE_URL?.trim() ||
-      process.env.STRONG_REASONING_MODEL?.trim() ||
-      process.env.REASONING_API_KEY?.trim() ||
-      process.env.REASONING_BASE_URL?.trim() ||
-      process.env.REASONING_MODEL?.trim(),
-  );
-  const primaryModel =
-    process.env.STRONG_REASONING_MODEL?.trim() ||
-    process.env.REASONING_MODEL?.trim() ||
-    process.env.DASHSCOPE_REASONING_MODEL?.trim() ||
-    DEFAULT_STRONG_MODEL;
-  const fallbackModel =
-    process.env.STRONG_REASONING_FALLBACK_MODEL !== undefined
-      ? process.env.STRONG_REASONING_FALLBACK_MODEL.trim()
-      : process.env.REASONING_FALLBACK_MODEL !== undefined
-        ? process.env.REASONING_FALLBACK_MODEL.trim()
-        : hasDedicatedProvider
-          ? ""
-          : process.env.DASHSCOPE_REASONING_FALLBACK_MODEL?.trim() ||
-            DEFAULT_STRONG_FALLBACK_MODEL;
-  const models = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
+  const models = [
+    ...new Set([settings.strongModel, settings.strongFallbackModel].filter(Boolean)),
+  ];
   return validModels(models)
     ? { tier: "strong", apiKey, baseUrl, models }
     : null;
 }
 
 function resolveEconomyProvider(
+  settings: ProductSettings,
   workspaceId?: string,
   region?: QwenRegion,
 ): ReasoningProvider | null {
@@ -200,11 +183,9 @@ function resolveEconomyProvider(
   const baseUrl = createTextBaseUrl(configuredBase, workspaceId, region);
   if (!apiKey || !baseUrl) return null;
 
-  const primaryModel =
-    process.env.ECONOMY_REASONING_MODEL?.trim() || DEFAULT_ECONOMY_MODEL;
-  const fallbackModel =
-    process.env.ECONOMY_REASONING_FALLBACK_MODEL?.trim() || "";
-  const models = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
+  const models = [
+    ...new Set([settings.economyModel, settings.economyFallbackModel].filter(Boolean)),
+  ];
   return validModels(models)
     ? { tier: "economy", apiKey, baseUrl, models }
     : null;
@@ -395,8 +376,9 @@ export async function POST(request: Request): Promise<Response> {
     risk === "normal"
       ? classifyReplyTier(parsedBody.question, parsedBody.history)
       : "strong";
-  const economyProvider = resolveEconomyProvider(workspaceId, region);
-  const strongProvider = resolveStrongProvider(workspaceId, region);
+  const productSettings = getProductSettings();
+  const economyProvider = resolveEconomyProvider(productSettings, workspaceId, region);
+  const strongProvider = resolveStrongProvider(productSettings, workspaceId, region);
   const providers =
     requestedTier === "economy"
       ? [economyProvider ?? strongProvider].filter(

@@ -1,30 +1,11 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { finalizeVoiceSession } from "@/lib/auth-store";
 import { jsonError } from "@/lib/request-security";
+import { verifyVoiceWorkerSignature } from "@/lib/voice-worker-signature";
 
 export const runtime = "nodejs";
 
 const MAX_BODY_BYTES = 2 * 1024;
-const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
-const SIGNATURE_PATTERN = /^[a-f0-9]{64}$/;
-
-function workerSecret(): string {
-  const secret =
-    process.env.VOICE_WORKER_SECRET?.trim() ||
-    process.env.SESSION_SECRET?.trim();
-  if (!secret || secret.length < 32) {
-    throw new Error("Voice worker secret is not configured.");
-  }
-  return secret;
-}
-
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "ascii");
-  const rightBuffer = Buffer.from(right, "ascii");
-  return leftBuffer.length === rightBuffer.length &&
-    timingSafeEqual(leftBuffer, rightBuffer);
-}
 
 export function verifyVoiceUsageSignature(
   rawBody: string,
@@ -32,25 +13,12 @@ export function verifyVoiceUsageSignature(
   signatureHeader: string | null,
   now = Date.now(),
 ): boolean {
-  const timestamp = Number(timestampHeader);
-  if (
-    !Number.isSafeInteger(timestamp) ||
-    Math.abs(now - timestamp) > MAX_CLOCK_SKEW_MS ||
-    !signatureHeader ||
-    !SIGNATURE_PATTERN.test(signatureHeader)
-  ) {
-    return false;
-  }
-  let secret: string;
-  try {
-    secret = workerSecret();
-  } catch {
-    return false;
-  }
-  const expected = createHmac("sha256", secret)
-    .update(`${timestamp}.${rawBody}`)
-    .digest("hex");
-  return safeEqual(expected, signatureHeader);
+  return verifyVoiceWorkerSignature(
+    rawBody,
+    timestampHeader,
+    signatureHeader,
+    now,
+  );
 }
 
 export async function POST(request: Request): Promise<Response> {

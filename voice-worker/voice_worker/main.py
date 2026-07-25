@@ -23,6 +23,7 @@ from .protocol import (
     safe_error,
     server_event,
 )
+from .runtime_config import RuntimeVoiceConfig, fetch_voice_config
 from .tts import QwenRealtimeTtsProvider, TtsRequest
 from .usage import report_voice_usage
 from .vad import SileroVadEngine, SpeechStarted, SpeechStopped
@@ -63,6 +64,9 @@ class ModelRegistry:
         self.asr: SenseVoiceAsr | None = None
         self.loading = False
         self.error_code: str | None = None
+        self.runtime_config = RuntimeVoiceConfig.from_settings(settings)
+        self.config_refreshed_at = 0.0
+        self.config_lock = asyncio.Lock()
 
     @property
     def ready(self) -> bool:
@@ -75,14 +79,21 @@ class ModelRegistry:
         started = time.monotonic()
         try:
             logger.info("event=models_loading")
+            self.runtime_config = await asyncio.to_thread(
+                fetch_voice_config,
+                self.settings.voice_config_url,
+                self.settings.worker_secret,
+                self.runtime_config,
+            )
+            self.config_refreshed_at = time.monotonic()
             vad, asr = await asyncio.gather(
                 asyncio.to_thread(
                     SileroVadEngine,
                     self.settings.vad_threshold,
-                    self.settings.min_silence_duration_ms,
+                    self.runtime_config.vad_silence_ms,
                     self.settings.speech_pad_ms,
                 ),
-                asyncio.to_thread(SenseVoiceAsr, self.settings.asr_model),
+                asyncio.to_thread(SenseVoiceAsr, self.runtime_config.asr_model),
             )
             self.vad = vad
             self.asr = asr
@@ -95,6 +106,21 @@ class ModelRegistry:
             logger.exception("event=models_failed")
         finally:
             self.loading = False
+
+    async def refresh_runtime_config(self) -> RuntimeVoiceConfig:
+        if time.monotonic() - self.config_refreshed_at < 15:
+            return self.runtime_config
+        async with self.config_lock:
+            if time.monotonic() - self.config_refreshed_at < 15:
+                return self.runtime_config
+            self.runtime_config = await asyncio.to_thread(
+                fetch_voice_config,
+                self.settings.voice_config_url,
+                self.settings.worker_secret,
+                self.runtime_config,
+            )
+            self.config_refreshed_at = time.monotonic()
+            return self.runtime_config
 
     def health(self) -> dict[str, Any]:
         return {
@@ -113,6 +139,7 @@ class VoiceConnection:
         websocket: WebSocket,
         registry: ModelRegistry,
         token: VoiceToken,
+        runtime_config: RuntimeVoiceConfig,
     ) -> None:
         self.websocket = websocket
         self.registry = registry
@@ -126,7 +153,7 @@ class VoiceConnection:
         companion = COMPANION_TTS[token.companion_voice]
         self.tts = QwenRealtimeTtsProvider(
             api_key=self.settings.dashscope_api_key,
-            model=self.settings.tts_model,
+            model=runtime_config.tts_model,
             voice=companion.provider_voice,
             instructions=companion.instructions,
             websocket_url=self.settings.tts_ws_url,
@@ -134,7 +161,9 @@ class VoiceConnection:
         )
         if registry.vad is None:
             raise RuntimeError("VAD is not ready.")
-        self.turn_detector = registry.vad.create_session()
+        self.turn_detector = registry.vad.create_session(
+            min_silence_duration_ms=runtime_config.vad_silence_ms,
+        )
 
     async def run(self) -> None:
         started = time.monotonic()
@@ -379,7 +408,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             active_subjects.add(token.subject)
 
         try:
-            await VoiceConnection(websocket, registry, token).run()
+            runtime_config = await registry.refresh_runtime_config()
+            await VoiceConnection(
+                websocket,
+                registry,
+                token,
+                runtime_config,
+            ).run()
         finally:
             async with active_lock:
                 active_subjects.discard(token.subject)

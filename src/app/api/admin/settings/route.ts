@@ -4,9 +4,12 @@ import {
 } from "@/lib/admin-request";
 import {
   getProductSettings,
+  isModelAlias,
   updateProductSettings,
 } from "@/lib/product-admin";
 import { jsonError } from "@/lib/request-security";
+import { isCompanionVoice } from "@/types/product";
+import { isQwenRealtimeModel } from "@/lib/realtime-session";
 
 export const runtime = "nodejs";
 
@@ -45,8 +48,49 @@ export async function PATCH(request: Request): Promise<Response> {
             ? input.vadSilenceMs
             : undefined,
         defaultCompanion:
-          typeof input.defaultCompanion === "string"
-            ? input.defaultCompanion as never
+          isCompanionVoice(input.defaultCompanion)
+            ? input.defaultCompanion
+            : undefined,
+        economyModel:
+          isModelAlias(input.economyModel)
+            ? input.economyModel
+            : undefined,
+        economyFallbackModel:
+          isModelAlias(input.economyFallbackModel, true)
+            ? input.economyFallbackModel
+            : undefined,
+        strongModel:
+          isModelAlias(input.strongModel)
+            ? input.strongModel
+            : undefined,
+        strongFallbackModel:
+          isModelAlias(input.strongFallbackModel, true)
+            ? input.strongFallbackModel
+            : undefined,
+        asrProvider:
+          input.asrProvider === "sensevoice-local"
+            ? input.asrProvider
+            : undefined,
+        asrModel:
+          isModelAlias(input.asrModel)
+            ? input.asrModel
+            : undefined,
+        ttsProvider:
+          input.ttsProvider === "qwen3-realtime"
+            ? input.ttsProvider
+            : undefined,
+        ttsModel:
+          isModelAlias(input.ttsModel)
+            ? input.ttsModel
+            : undefined,
+        highFidelityEnabled:
+          typeof input.highFidelityEnabled === "boolean"
+            ? input.highFidelityEnabled
+            : undefined,
+        highFidelityModel:
+          typeof input.highFidelityModel === "string" &&
+          isQwenRealtimeModel(input.highFidelityModel)
+            ? input.highFidelityModel
             : undefined,
       }),
     });

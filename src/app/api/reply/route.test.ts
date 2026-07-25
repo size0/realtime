@@ -7,6 +7,7 @@ const authMocks = vi.hoisted(() => ({
   usageAllowance: vi.fn(),
   getActiveCompanionPrompt: vi.fn(),
   updateConversation: vi.fn(),
+  getProductSettings: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({ getRequestSession: authMocks.getRequestSession }));
@@ -17,6 +18,9 @@ vi.mock("@/lib/auth-store", () => ({
 vi.mock("@/lib/conversation-store", () => ({
   getActiveCompanionPrompt: authMocks.getActiveCompanionPrompt,
   updateConversation: authMocks.updateConversation,
+}));
+vi.mock("@/lib/product-admin", () => ({
+  getProductSettings: authMocks.getProductSettings,
 }));
 
 import { POST } from "@/app/api/reply/route";
@@ -65,6 +69,42 @@ describe("POST /api/reply", () => {
       "先接住情绪，再给恰到好处的回应。",
     );
     authMocks.updateConversation.mockReturnValue(true);
+    authMocks.getProductSettings.mockImplementation(() => {
+      const dedicatedStrongProvider = Boolean(
+        process.env.STRONG_REASONING_API_KEY ||
+        process.env.STRONG_REASONING_BASE_URL ||
+        process.env.STRONG_REASONING_MODEL ||
+        process.env.REASONING_API_KEY ||
+        process.env.REASONING_BASE_URL ||
+        process.env.REASONING_MODEL
+      );
+      return {
+        guestTrialSeconds: 180,
+        wechatDailySeconds: 600,
+        vadSilenceMs: 1100,
+        defaultCompanion: "breeze",
+        economyModel: process.env.ECONOMY_REASONING_MODEL || "qwen3.5-flash",
+        economyFallbackModel:
+          process.env.ECONOMY_REASONING_FALLBACK_MODEL || "",
+        strongModel:
+          process.env.STRONG_REASONING_MODEL ||
+          process.env.REASONING_MODEL ||
+          process.env.DASHSCOPE_REASONING_MODEL ||
+          "qwen3.7-max",
+        strongFallbackModel:
+          process.env.STRONG_REASONING_FALLBACK_MODEL ??
+          process.env.REASONING_FALLBACK_MODEL ??
+          (dedicatedStrongProvider
+            ? ""
+            : process.env.DASHSCOPE_REASONING_FALLBACK_MODEL || "qwen3.7-plus"),
+        asrProvider: "sensevoice-local",
+        asrModel: "FunAudioLLM/SenseVoiceSmall",
+        ttsProvider: "qwen3-realtime",
+        ttsModel: "qwen3-tts-instruct-flash-realtime",
+        highFidelityEnabled: false,
+        highFidelityModel: "qwen3.5-omni-flash-realtime",
+      };
+    });
     configure();
   });
 

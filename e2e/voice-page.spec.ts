@@ -89,3 +89,18 @@ test("keeps the admin login hidden and opens the five backend modules", async ({
   await expect(page.getByLabel("微信每日额度（秒）")).toHaveValue("600");
   await expect(page.getByText(/API Key、AppSecret/)).toBeVisible();
 });
+
+test("shows model routing and TTS configuration in the admin console", async ({ page }) => {
+  await loginAdmin(page);
+  await page.waitForLoadState("networkidle");
+  await page.getByRole("button", { name: "产品设置" }).click();
+
+  await expect(page.getByText("回答模型路由")).toBeVisible();
+  await expect(page.getByLabel("日常倾诉模型")).toBeVisible();
+  await expect(page.getByLabel("复杂 / 风险问题模型")).toBeVisible();
+  await expect(page.getByLabel("语音识别模型")).toBeVisible();
+  await expect(page.getByLabel("朗读方案")).toHaveValue("qwen3-realtime");
+  await expect(page.getByLabel("朗读模型")).toHaveValue(
+    "qwen3-tts-instruct-flash-realtime",
+  );
+});

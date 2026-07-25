@@ -219,6 +219,16 @@ export function AdminConsole({
           wechatDailySeconds: Number(form.get("wechatDailySeconds")),
           vadSilenceMs: Number(form.get("vadSilenceMs")),
           defaultCompanion: form.get("defaultCompanion"),
+          economyModel: form.get("economyModel"),
+          economyFallbackModel: form.get("economyFallbackModel"),
+          strongModel: form.get("strongModel"),
+          strongFallbackModel: form.get("strongFallbackModel"),
+          asrProvider: form.get("asrProvider"),
+          asrModel: form.get("asrModel"),
+          ttsProvider: form.get("ttsProvider"),
+          ttsModel: form.get("ttsModel"),
+          highFidelityEnabled: form.get("highFidelityEnabled") === "true",
+          highFidelityModel: form.get("highFidelityModel"),
         }),
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -417,9 +427,25 @@ export function AdminConsole({
                 <label><span>微信每日额度（秒）</span><input name="wechatDailySeconds" type="number" min={60} max={3600} defaultValue={settings.wechatDailySeconds} /></label>
                 <label><span>默认陪伴角色</span><select name="defaultCompanion" defaultValue={settings.defaultCompanion}>{COMPANION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.name}</option>)}</select></label>
               </div>
+              <div className="ops-panel-title"><div><MessageCircleMore size={18} /><h2>回答模型路由</h2></div><span>保存后立即生效</span></div>
+              <div className="ops-settings-form">
+                <label><span>日常倾诉模型</span><input name="economyModel" type="text" maxLength={128} defaultValue={settings.economyModel} /></label>
+                <label><span>日常备用模型（可留空）</span><input name="economyFallbackModel" type="text" maxLength={128} defaultValue={settings.economyFallbackModel} /></label>
+                <label><span>复杂 / 风险问题模型</span><input name="strongModel" type="text" maxLength={128} defaultValue={settings.strongModel} /></label>
+                <label><span>强模型备用（可留空）</span><input name="strongFallbackModel" type="text" maxLength={128} defaultValue={settings.strongFallbackModel} /></label>
+              </div>
+              <div className="ops-panel-title"><div><Activity size={18} /><h2>语音链路</h2></div><span>只允许已接入方案</span></div>
+              <div className="ops-settings-form">
+                <label><span>语音识别方案</span><select name="asrProvider" defaultValue={settings.asrProvider}><option value="sensevoice-local">本地 SenseVoice</option></select></label>
+                <label><span>语音识别模型</span><input name="asrModel" type="text" maxLength={128} defaultValue={settings.asrModel} /></label>
+                <label><span>朗读方案</span><select name="ttsProvider" defaultValue={settings.ttsProvider}><option value="qwen3-realtime">千问 Qwen3 实时 TTS</option></select></label>
+                <label><span>朗读模型</span><input name="ttsModel" type="text" maxLength={128} defaultValue={settings.ttsModel} /></label>
+                <label><span>高保真链路</span><select name="highFidelityEnabled" defaultValue={String(settings.highFidelityEnabled)}><option value="false">关闭（生产默认）</option><option value="true">仅后台测试时开启</option></select></label>
+                <label><span>高保真实时模型</span><select name="highFidelityModel" defaultValue={settings.highFidelityModel}><option value="qwen3.5-omni-flash-realtime">Qwen3.5 Omni Flash Realtime</option><option value="qwen3.5-omni-plus-realtime">Qwen3.5 Omni Plus Realtime</option></select></label>
+              </div>
               <button className="ops-save-button" type="submit" disabled={savingSettings}>{savingSettings ? "保存中…" : "保存产品参数"}</button>
               <p className="ops-secret-note">API Key、AppSecret、加密密钥和供应商地址只存在于服务器环境变量，后台不会显示。</p>
-              <p className="ops-secret-note">额度会立即生效；VAD 断句时长需语音 Worker 重启后生效。</p>
+              <p className="ops-secret-note">额度与回答模型立即生效；ASR 模型变更需要语音 Worker 重启，其余语音参数在下一次连接生效。</p>
             </form>
           </>
         )}

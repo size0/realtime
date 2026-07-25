@@ -4,12 +4,12 @@ import { recordUsage, usageAllowance } from "@/lib/auth-store";
 import { isRealtimeVoice } from "@/types/realtime";
 import {
   createQwenRealtimeUrl,
-  DEFAULT_QWEN_REALTIME_MODEL,
   isQwenRealtimeModel,
   isValidWorkspaceId,
   type QwenRegion,
 } from "@/lib/realtime-session";
 import { DEFAULT_REALTIME_VOICE } from "@/lib/qwen-session";
+import { getProductSettings } from "@/lib/product-admin";
 
 export const runtime = "nodejs";
 
@@ -69,6 +69,14 @@ export async function POST(request: Request): Promise<Response> {
 
   const session = await getRequestSession(request);
   if (!session) return errorResponse("UNAUTHENTICATED", "请先登录。", 401);
+  const productSettings = getProductSettings();
+  if (!productSettings.highFidelityEnabled) {
+    return errorResponse(
+      "HIGH_FIDELITY_DISABLED",
+      "高保真实时链路当前仅供后台测试，生产环境未开启。",
+      403,
+    );
+  }
 
   const voice = new URL(request.url).searchParams.get("voice") ?? DEFAULT_REALTIME_VOICE;
   if (!isRealtimeVoice(voice)) {
@@ -118,8 +126,7 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("INVALID_SERVER_CONFIG", "百炼业务空间 ID 格式无效。", 503);
   }
 
-  const modelValue =
-    process.env.DASHSCOPE_REALTIME_MODEL?.trim() || DEFAULT_QWEN_REALTIME_MODEL;
+  const modelValue = productSettings.highFidelityModel;
   if (!isQwenRealtimeModel(modelValue)) {
     return errorResponse("INVALID_SERVER_CONFIG", "千问 Realtime 模型配置无效。", 503);
   }

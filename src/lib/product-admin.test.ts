@@ -48,12 +48,24 @@ describe("product settings and prompt versions", () => {
       wechatDailySeconds: 900,
       vadSilenceMs: 1300,
       defaultCompanion: "nightwatch",
+      economyModel: "qwen3.5-flash",
+      strongModel: "gpt-5.5",
+      strongFallbackModel: "gpt-5.4",
+      ttsModel: "qwen3-tts-instruct-flash-realtime",
+      highFidelityEnabled: true,
+      highFidelityModel: "qwen3.5-omni-plus-realtime",
     });
     expect(updated).toMatchObject({
       guestTrialSeconds: 240,
       wechatDailySeconds: 900,
       vadSilenceMs: 1300,
       defaultCompanion: "nightwatch",
+      economyModel: "qwen3.5-flash",
+      strongModel: "gpt-5.5",
+      strongFallbackModel: "gpt-5.4",
+      ttsModel: "qwen3-tts-instruct-flash-realtime",
+      highFidelityEnabled: true,
+      highFidelityModel: "qwen3.5-omni-plus-realtime",
     });
     const guest = await createGuestUser();
     expect(await voiceSecondsAllowance(guest.id)).toMatchObject({
