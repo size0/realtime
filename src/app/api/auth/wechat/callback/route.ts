@@ -9,6 +9,7 @@ import {
 } from "@/lib/wechat-oauth";
 import { WECHAT_STATE_COOKIE } from "@/app/api/auth/wechat/start/route";
 import { redirectResponse } from "@/lib/http-response";
+import { expectedRequestOrigin } from "@/lib/request-security";
 
 function cookieValue(header: string | null, name: string): string | null {
   if (!header) return null;
@@ -20,7 +21,7 @@ function cookieValue(header: string | null, name: string): string | null {
 }
 
 function failure(request: Request, code: string): Response {
-  const target = new URL("/", request.url);
+  const target = new URL("/", `${expectedRequestOrigin(request)}/`);
   target.searchParams.set("wechatError", code);
   return redirectResponse(target);
 }
@@ -39,7 +40,7 @@ export async function GET(request: Request): Promise<Response> {
     const identity = await exchangeWechatCode(code);
     const user = await upgradeGuestToWechat(transaction.guestUserId, identity.openId);
     const session = createSession(user);
-    const target = new URL(transaction.returnTo, request.url);
+    const target = new URL(transaction.returnTo, `${expectedRequestOrigin(request)}/`);
     const response = redirectResponse(target);
     response.headers.append("Set-Cookie", sessionCookie(session.token));
     response.headers.append(
