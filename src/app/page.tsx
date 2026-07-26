@@ -12,20 +12,24 @@ export default async function Home({
   searchParams: Promise<{ wechatError?: string }>;
 }) {
   const session = await getCurrentSession();
+  const requestHeaders = await headers();
+  const isWechat = /MicroMessenger/i.test(requestHeaders.get("user-agent") ?? "");
+  const canBindWechat = isWechatOauthConfigured();
+  const query = await searchParams;
   if (session) {
     return (
       <VoiceConsole
         user={session.user}
         csrfToken={session.csrfToken}
         defaultCompanion={getProductSettings().defaultCompanion}
+        isWechat={isWechat}
+        canBindWechat={canBindWechat}
+        wechatError={isWechat ? query.wechatError : undefined}
       />
     );
   }
 
-  const query = await searchParams;
-  const requestHeaders = await headers();
-  const isWechat = /MicroMessenger/i.test(requestHeaders.get("user-agent") ?? "");
-  if (isWechat && isWechatOauthConfigured() && !query.wechatError) {
+  if (isWechat && canBindWechat && !query.wechatError) {
     redirect("/api/auth/wechat/start?returnTo=/");
   }
   return (

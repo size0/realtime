@@ -7,7 +7,7 @@ const API_ERROR_MESSAGES: Record<string, string> = {
   QWEN_WORKSPACE: "模型业务空间或接入地址不正确。",
   RATE_LIMITED: "连接请求过于频繁，请稍后再试。",
   GUEST_DAILY_LIMIT: "今天的访客体验额度已经用完。",
-  VOICE_QUOTA_EXHAUSTED: "可用语音时间已经用完，请在微信里继续聊。",
+  VOICE_QUOTA_EXHAUSTED: "可用语音时间已经用完，请绑定微信后继续聊。",
   QWEN_UNAVAILABLE: "语音服务暂时不可用，请稍后重试。",
   REPLY_RATE_LIMITED: "回复请求有点多，请稍后再说一次。",
   REPLY_TIMEOUT: "这次回应等得有点久，请再说一次。",

@@ -48,6 +48,16 @@ interface ActiveSpeechResponse {
   segmentIndex: number;
 }
 
+class VoiceApiError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "VoiceApiError";
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -80,21 +90,27 @@ function isSplitVoiceServerEvent(value: unknown): value is SplitVoiceServerEvent
   );
 }
 
-async function readApiError(response: Response): Promise<string> {
+async function readApiError(response: Response): Promise<VoiceApiError> {
   try {
     const payload: unknown = await response.json();
     if (isRecord(payload) && isRecord(payload.error)) {
-      return mapApiError(
-        typeof payload.error.code === "string" ? payload.error.code : undefined,
-        typeof payload.error.message === "string"
-          ? payload.error.message
-          : undefined,
+      const code = typeof payload.error.code === "string"
+        ? payload.error.code
+        : undefined;
+      return new VoiceApiError(
+        mapApiError(
+          code,
+          typeof payload.error.message === "string"
+            ? payload.error.message
+            : undefined,
+        ),
+        code,
       );
     }
   } catch {
     // Fall through to a stable message.
   }
-  return mapApiError(undefined);
+  return new VoiceApiError(mapApiError(undefined));
 }
 
 function canUseMicrophone(): boolean {
@@ -119,6 +135,7 @@ export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
   const [audioLevel, setAudioLevel] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const [quotaExhausted, setQuotaExhausted] = useState(false);
   const [replyTier, setReplyTier] = useState<"economy" | "strong" | null>(null);
 
   const websocketRef = useRef<WebSocket | null>(null);
@@ -264,6 +281,7 @@ export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
     setIsMuted(false);
     setElapsedSeconds(0);
     setRemainingSeconds(null);
+    setQuotaExhausted(false);
     setReplyTier(null);
     seenEventIdsRef.current.clear();
   }, [stopMeter, stopPlayback]);
@@ -310,7 +328,7 @@ export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
           }),
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error(await readApiError(response));
+        if (!response.ok) throw await readApiError(response);
         const payload: unknown = await response.json();
         if (!isReplyResponse(payload) || !payload.reply.trim()) {
           throw new Error("没有收到可朗读的回答，请再说一次。");
@@ -408,9 +426,7 @@ export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
         },
         body: JSON.stringify({ companionVoice: voice }),
       });
-      if (!conversationResponse.ok) {
-        throw new Error(await readApiError(conversationResponse));
-      }
+      if (!conversationResponse.ok) throw await readApiError(conversationResponse);
       const conversationPayload: unknown = await conversationResponse.json();
       if (
         !isRecord(conversationPayload) ||
@@ -429,7 +445,7 @@ export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
         },
         body: JSON.stringify({ companionVoice: voice }),
       });
-      if (!tokenResponse.ok) throw new Error(await readApiError(tokenResponse));
+      if (!tokenResponse.ok) throw await readApiError(tokenResponse);
       const tokenPayload: unknown = await tokenResponse.json();
       if (!isVoiceTokenResponse(tokenPayload)) {
         throw new Error("语音服务返回了无效的连接信息。");
@@ -599,6 +615,7 @@ export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
               updateConversationStatus("completed");
               disposeResources();
               setRemainingSeconds(0);
+              setQuotaExhausted(true);
               dispatch({ type: "set-status", status: "disconnected" });
               break;
             case "error":
@@ -626,11 +643,16 @@ export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
       await openPromise;
     } catch (error: unknown) {
       if (connectionAttemptRef.current !== attempt) return;
-      failAttempt(
-        error instanceof Error && error.message
-          ? mapBrowserError(error)
-          : "语音连接失败，请稍后重试。",
-      );
+      const message = error instanceof Error && error.message
+        ? mapBrowserError(error)
+        : "语音连接失败，请稍后重试。";
+      const exhausted =
+        error instanceof VoiceApiError && error.code === "VOICE_QUOTA_EXHAUSTED";
+      failAttempt(message);
+      if (exhausted) {
+        setRemainingSeconds(0);
+        setQuotaExhausted(true);
+      }
     }
   }, [
     csrfToken,
@@ -735,6 +757,7 @@ export function useSplitVoice(voice: CompanionVoice, csrfToken: string) {
     audioLevel,
     elapsedSeconds,
     remainingSeconds,
+    quotaExhausted,
     replyTier,
     connect,
     endCall,

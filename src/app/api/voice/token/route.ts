@@ -60,7 +60,7 @@ export async function POST(request: Request): Promise<Response> {
     return jsonError(
       "VOICE_QUOTA_EXHAUSTED",
       session.user.accountType === "guest"
-        ? "访客体验时间已经用完，请在微信中继续使用。"
+        ? "访客体验时间已经用完，请绑定微信后继续使用。"
         : "今天的语音时间已经用完，明天再来聊聊。",
       429,
     );

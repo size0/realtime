@@ -1276,7 +1276,11 @@ select {
   font-size: 10px;
 }
 
-.treehole-wechat button {
+.treehole-wechat button,
+.treehole-wechat-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 12px;
   border: 1px solid rgba(231, 184, 106, 0.28);
   border-radius: 99px;
@@ -1284,6 +1288,7 @@ select {
   background: transparent;
   font-size: 11px;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .treehole-wechat p {

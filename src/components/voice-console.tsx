@@ -31,6 +31,12 @@ import type { CallStatus } from "@/types/realtime";
 
 const COMPANION_STORAGE_KEY = "treehole.companion.v1";
 
+const WECHAT_ERROR_COPY: Record<string, string> = {
+  state: "微信登录校验没有通过，请重新绑定。",
+  expired: "这次微信授权已经过期，请重新绑定。",
+  provider: "微信登录暂时没有完成，请稍后再试。",
+};
+
 const STATUS_COPY: Record<CallStatus, { title: string; detail: string }> = {
   idle: { title: "今晚，想说点什么？", detail: "这里没有评判，也不用组织好语言。" },
   "requesting-permission": {
@@ -65,12 +71,18 @@ interface VoiceConsoleProps {
   user: PublicUser;
   csrfToken: string;
   defaultCompanion: CompanionVoice;
+  isWechat?: boolean;
+  canBindWechat?: boolean;
+  wechatError?: string;
 }
 
 export function VoiceConsole({
   user,
   csrfToken,
   defaultCompanion,
+  isWechat = false,
+  canBindWechat = false,
+  wechatError,
 }: VoiceConsoleProps) {
   const [showCaptions, setShowCaptions] = useState(true);
   const [isTranscriptExpanded, setIsTranscriptExpanded] = useState(false);
@@ -87,6 +99,7 @@ export function VoiceConsole({
     isActive,
     audioLevel,
     remainingSeconds,
+    quotaExhausted,
     connect,
     endCall,
     toggleMute,
@@ -100,7 +113,31 @@ export function VoiceConsole({
     [selectedCompanion],
   );
   const status = STATUS_COPY[callStatus];
-  const quotaEnded = remainingSeconds === 0;
+  const quotaEnded = quotaExhausted || remainingSeconds === 0;
+  const wechatBindHref = "/api/auth/wechat/start?returnTo=/";
+  const canStartWechatBinding = isWechat && canBindWechat;
+  const wechatBindError =
+    isWechat && wechatError
+      ? WECHAT_ERROR_COPY[wechatError] ?? "微信登录暂时没有完成，请重新绑定。"
+      : null;
+  const wechatTipTitle = quotaEnded ? "体验时间用完了" : "访客可先体验 3 分钟";
+  const wechatTipDetail = wechatBindError
+    ? `上次绑定没成功：${wechatBindError}`
+    : canStartWechatBinding
+    ? "你已经在微信里，点下方按钮绑定微信，授权后每天可以继续聊 10 分钟。"
+    : isWechat
+      ? "你已经在微信里，微信绑定暂未开启；请稍后再试。"
+      : "在微信内打开后，每天可以继续聊 10 分钟。";
+  const wechatTipAction = canStartWechatBinding
+    ? "绑定微信继续聊"
+    : isWechat
+      ? "微信绑定暂未开启"
+      : "在微信里继续聊";
+  const wechatTipHelp = canStartWechatBinding
+    ? "若没有弹出授权，请点右上角刷新后再试。"
+    : isWechat
+      ? "管理员开启公众号 AppID / AppSecret 后，这里会直接发起绑定。"
+      : "请在微信中打开 voice.xdw0.cn，会自动生成你的匿名树洞账号。";
 
   useEffect(() => {
     const stored = window.localStorage.getItem(COMPANION_STORAGE_KEY);
@@ -259,14 +296,24 @@ export function VoiceConsole({
           {user.accountType === "guest" && (quotaEnded || !isActive) && (
             <div className={`treehole-wechat ${quotaEnded ? "is-prominent" : ""}`}>
               <div>
-                <strong>{quotaEnded ? "体验时间用完了" : "访客可先体验 3 分钟"}</strong>
-                <span>在微信内打开后，每天可以继续聊 10 分钟。</span>
+                <strong>{wechatTipTitle}</strong>
+                <span>{wechatTipDetail}</span>
               </div>
-              <button type="button" onClick={() => setShowWechatTip((value) => !value)}>
-                在微信里继续聊
-              </button>
-              {showWechatTip && (
-                <p>请在微信中打开 <b>voice.xdw0.cn</b>，会自动生成你的匿名树洞账号。</p>
+              {canStartWechatBinding ? (
+                <a className="treehole-wechat-action" href={wechatBindHref}>
+                  {wechatTipAction}
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  disabled={isWechat}
+                  onClick={() => setShowWechatTip((value) => !value)}
+                >
+                  {wechatTipAction}
+                </button>
+              )}
+              {(isWechat || showWechatTip) && (
+                <p>{isWechat ? wechatTipHelp : <>请在微信中打开 <b>voice.xdw0.cn</b>，会自动生成你的匿名树洞账号。</>}</p>
               )}
             </div>
           )}
