@@ -4,6 +4,7 @@ import {
   createWechatOauthTransaction,
   WechatOauthError,
 } from "@/lib/wechat-oauth";
+import { redirectResponse } from "@/lib/http-response";
 
 export const runtime = "nodejs";
 export const WECHAT_STATE_COOKIE = "wechat_oauth_state";
@@ -29,7 +30,7 @@ export async function GET(request: Request): Promise<Response> {
       session?.user.accountType === "guest" ? session.user.id : null,
       returnTo,
     );
-    const response = Response.redirect(createWechatAuthorizeUrl(transaction.state), 303);
+    const response = redirectResponse(createWechatAuthorizeUrl(transaction.state));
     response.headers.append(
       "Set-Cookie",
       `${WECHAT_STATE_COOKIE}=${transaction.state}; Path=/api/auth/wechat/callback; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
