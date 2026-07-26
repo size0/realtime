@@ -6,6 +6,8 @@ describe("client error mapping", () => {
     expect(mapApiError("MISSING_API_KEY")).toContain("模型密钥");
     expect(mapApiError("MISSING_API_KEY")).not.toContain("sk-");
     expect(mapApiError("RATE_LIMITED")).toContain("频繁");
+    expect(mapApiError("VOICE_QUOTA_EXHAUSTED", "今天的语音时间已经用完，明天再来聊聊。"))
+      .toBe("今天的语音时间已经用完，明天再来聊聊。");
   });
 
   it("maps browser microphone errors", () => {

@@ -24,6 +24,7 @@ const API_ERROR_MESSAGES: Record<string, string> = {
 };
 
 export function mapApiError(code: string | undefined, fallback?: string): string {
+  if (code === "VOICE_QUOTA_EXHAUSTED" && fallback) return fallback;
   if (code && API_ERROR_MESSAGES[code]) return API_ERROR_MESSAGES[code];
   return fallback || "暂时无法建立语音连接，请稍后重试。";
 }

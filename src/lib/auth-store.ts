@@ -14,6 +14,7 @@ const scrypt = promisify(scryptCallback);
 const USERNAME_PATTERN = /^[A-Za-z0-9_.-]{3,32}$/;
 const MIN_PASSWORD_LENGTH = 10;
 const MAX_PASSWORD_LENGTH = 128;
+const STALE_ACTIVE_VOICE_SESSION_MS = 2 * 60 * 60 * 1000;
 
 export type UserRole = "admin" | "user";
 export type AccountType = "managed" | "guest" | "wechat";
@@ -498,11 +499,22 @@ function quotaLimit(user: PublicUser): number | null {
   return Number.isInteger(value) && value > 0 && value <= 86_400 ? value : fallback;
 }
 
+function cancelStaleVoiceReservations(now = Date.now()): void {
+  database().prepare(`
+    UPDATE voice_sessions
+    SET status = 'cancelled', finished_at = ?
+    WHERE status = 'active'
+      AND used_seconds = 0
+      AND started_at < ?
+  `).run(now, now - STALE_ACTIVE_VOICE_SESSION_MS);
+}
+
 export async function voiceSecondsAllowance(
   userId: string,
   now = Date.now(),
 ): Promise<VoiceAllowance> {
   await ensureAdmin();
+  cancelStaleVoiceReservations(now);
   const user = getRow(userId);
   if (!user) throw new AuthStoreError("USER_NOT_FOUND", "用户不存在。");
   const publicValue = publicUser(user);
@@ -515,11 +527,15 @@ export async function voiceSecondsAllowance(
     : Date.parse(`${chinaDateKey(now)}T00:00:00+08:00`);
   const result = database().prepare(`
     SELECT COALESCE(SUM(
-      CASE WHEN status = 'active' THEN reserved_seconds ELSE used_seconds END
+      CASE
+        WHEN status = 'active'
+          THEN MIN(reserved_seconds, MAX(0, (? - started_at) / 1000.0))
+        ELSE used_seconds
+      END
     ), 0) AS used
     FROM voice_sessions
     WHERE user_id = ? AND status != 'cancelled' AND started_at >= ?
-  `).get(userId, start) as { used: number };
+  `).get(now, userId, start) as { used: number };
   const usedSeconds = Math.max(0, Math.round(result.used));
   return {
     limitSeconds,

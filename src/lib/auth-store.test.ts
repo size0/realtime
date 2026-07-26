@@ -16,7 +16,7 @@ import {
   usageAllowance,
   voiceSecondsAllowance,
 } from "@/lib/auth-store";
-import { resetDatabaseForTests } from "@/lib/database";
+import { database, resetDatabaseForTests } from "@/lib/database";
 import {
   createSession,
   getRequestSession,
@@ -186,5 +186,43 @@ describe("authentication store and signed sessions", () => {
 
     const stored = await readFile(process.env.APP_DATABASE_FILE!);
     expect(stored.toString("utf8")).not.toContain("openid-never-store-plain");
+  });
+
+  it("counts active voice sessions by elapsed seconds instead of full reservation", async () => {
+    process.env.GUEST_TRIAL_SECONDS = "180";
+    const guest = await createGuestUser();
+    const now = Date.parse("2026-07-26T12:00:00+08:00");
+    database().prepare(`
+      INSERT INTO voice_sessions(
+        id, user_id, reserved_seconds, used_seconds, status, companion_voice, started_at
+      ) VALUES(?, ?, ?, 0, 'active', 'breeze', ?)
+    `).run("active-session-test", guest.id, 180, now - 30_000);
+
+    expect(await voiceSecondsAllowance(guest.id, now)).toMatchObject({
+      limitSeconds: 180,
+      usedSeconds: 30,
+      remainingSeconds: 150,
+    });
+  });
+
+  it("cancels stale unreported active voice reservations", async () => {
+    process.env.GUEST_TRIAL_SECONDS = "180";
+    const guest = await createGuestUser();
+    const now = Date.parse("2026-07-26T12:00:00+08:00");
+    database().prepare(`
+      INSERT INTO voice_sessions(
+        id, user_id, reserved_seconds, used_seconds, status, companion_voice, started_at
+      ) VALUES(?, ?, ?, 0, 'active', 'breeze', ?)
+    `).run("stale-active-session-test", guest.id, 180, now - (3 * 60 * 60 * 1000));
+
+    expect(await voiceSecondsAllowance(guest.id, now)).toMatchObject({
+      limitSeconds: 180,
+      usedSeconds: 0,
+      remainingSeconds: 180,
+    });
+    const row = database().prepare(
+      "SELECT status FROM voice_sessions WHERE id = ?",
+    ).get("stale-active-session-test") as { status: string };
+    expect(row.status).toBe("cancelled");
   });
 });
