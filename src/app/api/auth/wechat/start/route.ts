@@ -8,6 +8,19 @@ import {
 export const runtime = "nodejs";
 export const WECHAT_STATE_COOKIE = "wechat_oauth_state";
 
+function logWechatStartError(error: unknown): void {
+  const details =
+    error instanceof Error
+      ? {
+          name: error.name,
+          message: error.message,
+          code: error instanceof WechatOauthError ? error.code : undefined,
+          stack: error.stack,
+        }
+      : { value: error };
+  console.error("wechat_oauth_start_failed", details);
+}
+
 export async function GET(request: Request): Promise<Response> {
   const session = await getRequestSession(request);
   const returnTo = new URL(request.url).searchParams.get("returnTo") || "/";
@@ -24,6 +37,7 @@ export async function GET(request: Request): Promise<Response> {
     response.headers.set("Cache-Control", "no-store");
     return response;
   } catch (error: unknown) {
+    logWechatStartError(error);
     const message =
       error instanceof WechatOauthError
         ? error.message
