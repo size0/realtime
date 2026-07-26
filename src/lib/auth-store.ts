@@ -120,6 +120,21 @@ function validateDisplayName(displayName: string): string {
   return normalized;
 }
 
+function fallbackWechatDisplayName(): string {
+  return `树洞旅人 ${randomBytes(2).readUInt16BE().toString().padStart(5, "0")}`;
+}
+
+function wechatDisplayName(
+  displayName: string | null | undefined,
+  fallbackDisplayName?: string,
+): string {
+  try {
+    return validateDisplayName(displayName ?? "");
+  } catch {
+    return fallbackDisplayName ?? fallbackWechatDisplayName();
+  }
+}
+
 async function passwordDigest(password: string, salt: string): Promise<Buffer> {
   return (await scrypt(password, salt, 64)) as Buffer;
 }
@@ -343,6 +358,7 @@ function identityHash(openId: string): string {
 export async function upgradeGuestToWechat(
   guestUserId: string | null,
   openId: string,
+  displayName?: string | null,
 ): Promise<PublicUser> {
   return serialized(async () => {
     await ensureAdmin();
@@ -355,6 +371,7 @@ export async function upgradeGuestToWechat(
     `).get(fingerprint) as UserRow | undefined;
     const now = Date.now();
     if (existing) {
+      const nextDisplayName = wechatDisplayName(displayName, existing.display_name);
       if (guestUserId && guestUserId !== existing.id) {
         const merge = db.transaction(() => {
           db.prepare("UPDATE conversations SET user_id = ? WHERE user_id = ?")
@@ -368,16 +385,22 @@ export async function upgradeGuestToWechat(
       }
       db.prepare("UPDATE oauth_identities SET last_login_at = ? WHERE provider = 'wechat_official' AND subject_hash = ?")
         .run(now, fingerprint);
-      db.prepare("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?")
-        .run(now, now, existing.id);
-      return publicUser({ ...existing, last_login_at: now, updated_at: now });
+      db.prepare("UPDATE users SET display_name = ?, last_login_at = ?, updated_at = ? WHERE id = ?")
+        .run(nextDisplayName, now, now, existing.id);
+      return publicUser({
+        ...existing,
+        display_name: nextDisplayName,
+        last_login_at: now,
+        updated_at: now,
+      });
     }
 
     let row = guestUserId ? getRow(guestUserId) : undefined;
+    const nextDisplayName = wechatDisplayName(displayName);
     if (!row || row.account_type !== "guest") {
       row = await newUser({
         username: `wechat_${fingerprint.slice(0, 10)}`,
-        displayName: `树洞旅人 ${randomBytes(2).readUInt16BE().toString().padStart(5, "0")}`,
+        displayName: nextDisplayName,
         password: randomBytes(32).toString("base64url"),
         role: "user",
         accountType: "wechat",
@@ -386,15 +409,14 @@ export async function upgradeGuestToWechat(
       insertUser(db, row);
     } else {
       const username = `wechat_${fingerprint.slice(0, 10)}`;
-      const displayName = `树洞旅人 ${randomBytes(2).readUInt16BE().toString().padStart(5, "0")}`;
       db.prepare(`
         UPDATE users SET username = ?, display_name = ?, account_type = 'wechat',
           last_login_at = ?, updated_at = ? WHERE id = ?
-      `).run(username, displayName, now, now, row.id);
+      `).run(username, nextDisplayName, now, now, row.id);
       row = {
         ...row,
         username,
-        display_name: displayName,
+        display_name: nextDisplayName,
         account_type: "wechat",
         last_login_at: now,
         updated_at: now,

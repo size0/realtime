@@ -38,7 +38,11 @@ export async function GET(request: Request): Promise<Response> {
   if (!transaction) return failure(request, "expired");
   try {
     const identity = await exchangeWechatCode(code);
-    const user = await upgradeGuestToWechat(transaction.guestUserId, identity.openId);
+    const user = await upgradeGuestToWechat(
+      transaction.guestUserId,
+      identity.openId,
+      identity.displayName,
+    );
     const session = createSession(user);
     const target = new URL(transaction.returnTo, `${expectedRequestOrigin(request)}/`);
     const response = redirectResponse(target);

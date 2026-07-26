@@ -40,7 +40,7 @@ describe("GET /api/auth/wechat/start", () => {
     expect(response.headers.get("location")).toContain(
       "https://open.weixin.qq.com/connect/oauth2/authorize",
     );
-    expect(response.headers.get("location")).toContain("scope=snsapi_base");
+    expect(response.headers.get("location")).toContain("scope=snsapi_userinfo");
     expect(response.headers.get("set-cookie")).toContain(`${WECHAT_STATE_COOKIE}=`);
   });
 });

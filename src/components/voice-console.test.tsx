@@ -61,6 +61,7 @@ const wechatUser: PublicUser = {
   ...guestUser,
   id: "wechat-1",
   username: "wechat_abc",
+  displayName: "微信用户",
   accountType: "wechat",
 };
 
@@ -120,7 +121,7 @@ describe("VoiceConsole WeChat guest prompt", () => {
     );
   });
 
-  it("shows a clear bound state for WeChat accounts", () => {
+  it("shows the WeChat display name without an extra bound-state chip", () => {
     render(
       <VoiceConsole
         user={wechatUser}
@@ -131,7 +132,8 @@ describe("VoiceConsole WeChat guest prompt", () => {
       />,
     );
 
-    expect(screen.getByText("微信已绑定")).toBeVisible();
+    expect(screen.getByText("微信用户")).toBeVisible();
+    expect(screen.queryByText("微信已绑定")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "绑定微信" })).not.toBeInTheDocument();
   });
 });

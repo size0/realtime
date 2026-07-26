@@ -156,11 +156,13 @@ describe("authentication store and signed sessions", () => {
     const upgraded = await upgradeGuestToWechat(
       guest.id,
       "openid-never-store-plain",
+      "微信用户",
     );
     expect(upgraded).toMatchObject({
       id: guest.id,
       accountType: "wechat",
       role: "user",
+      displayName: "微信用户",
     });
     expect(upgraded.username).not.toContain("openid-never-store-plain");
     expect(await voiceSecondsAllowance(upgraded.id)).toMatchObject({
@@ -168,6 +170,19 @@ describe("authentication store and signed sessions", () => {
       usedSeconds: 120,
       remainingSeconds: 480,
     });
+
+    const refreshed = await upgradeGuestToWechat(
+      null,
+      "openid-never-store-plain",
+      "新的微信名",
+    );
+    expect(refreshed).toMatchObject({
+      id: guest.id,
+      displayName: "新的微信名",
+    });
+
+    const preserved = await upgradeGuestToWechat(null, "openid-never-store-plain", null);
+    expect(preserved.displayName).toBe("新的微信名");
 
     const stored = await readFile(process.env.APP_DATABASE_FILE!);
     expect(stored.toString("utf8")).not.toContain("openid-never-store-plain");

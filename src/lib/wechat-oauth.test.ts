@@ -39,11 +39,11 @@ describe("WeChat Official Account OAuth", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  it("creates a silent snsapi_base URL and consumes state exactly once", () => {
+  it("creates a snsapi_userinfo URL and consumes state exactly once", () => {
     const transaction = createWechatOauthTransaction("guest-1", "/?from=wechat", 1_000);
     const url = new URL(createWechatAuthorizeUrl(transaction.state));
     expect(url.origin).toBe("https://open.weixin.qq.com");
-    expect(url.searchParams.get("scope")).toBe("snsapi_base");
+    expect(url.searchParams.get("scope")).toBe("snsapi_userinfo");
     expect(url.searchParams.get("state")).toBe(transaction.state);
     expect(url.toString()).toContain("#wechat_redirect");
 
@@ -64,15 +64,44 @@ describe("WeChat Official Account OAuth", () => {
   });
 
   it("maps a successful code exchange without exposing upstream errors", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      access_token: "temporary-token",
-      expires_in: 7200,
-      refresh_token: "refresh",
-      openid: "openid-123",
-      scope: "snsapi_base",
-    }), { status: 200 })));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/sns/userinfo")) {
+        return new Response(JSON.stringify({
+          openid: "openid-123",
+          nickname: " 微信\u0000用户 ",
+          headimgurl: "https://wx.example/avatar.jpg",
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        access_token: "temporary-token",
+        expires_in: 7200,
+        refresh_token: "refresh",
+        openid: "openid-123",
+        scope: "snsapi_userinfo",
+      }), { status: 200 });
+    }));
     await expect(exchangeWechatCode("valid-code")).resolves.toEqual({
       openId: "openid-123",
+      displayName: "微信用户",
+    });
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/sns/userinfo")) {
+        return new Response(JSON.stringify({
+          openid: "other-openid",
+          nickname: "错误用户",
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        access_token: "temporary-token",
+        openid: "openid-123",
+        scope: "snsapi_userinfo",
+      }), { status: 200 });
+    }));
+    await expect(exchangeWechatCode("valid-code")).rejects.toMatchObject({
+      code: "WECHAT_CODE_INVALID",
     });
 
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({

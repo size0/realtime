@@ -139,14 +139,12 @@ export function VoiceConsole({
       ? "管理员开启公众号 AppID / AppSecret 后，这里会直接发起绑定。"
       : "请在微信中打开 voice.xdw0.cn，会自动生成你的匿名树洞账号。";
   const accountStatus =
-    user.accountType === "wechat"
-      ? "微信已绑定"
-      : user.accountType === "guest"
+    user.accountType === "guest"
         ? "访客"
         : "已登录";
   const accountStatusTitle =
     user.accountType === "wechat"
-      ? "已用微信绑定，当前仍是匿名树洞账号"
+      ? "已用微信绑定"
       : user.accountType === "guest"
         ? "当前是访客账号，绑定微信后每天可以继续聊"
         : "后台账号已登录";
@@ -191,7 +189,7 @@ export function VoiceConsole({
             <LockKeyhole size={13} />
             文字加密保存30天 · 不保存音频
           </span>
-          {user.accountType === "guest" && canStartWechatBinding ? (
+          {user.accountType === "wechat" ? null : user.accountType === "guest" && canStartWechatBinding ? (
             <a
               className="treehole-account-status is-action"
               href={wechatBindHref}

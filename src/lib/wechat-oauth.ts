@@ -101,7 +101,7 @@ export function createWechatAuthorizeUrl(state: string): string {
   url.searchParams.set("appid", appId);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", "snsapi_base");
+  url.searchParams.set("scope", "snsapi_userinfo");
   url.searchParams.set("state", state);
   url.hash = "wechat_redirect";
   return url.toString();
@@ -111,7 +111,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-export async function exchangeWechatCode(code: string): Promise<{ openId: string }> {
+function cleanWechatNickname(value: string | undefined): string | null {
+  const normalized = value
+    ?.replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  return normalized && normalized.length <= 40 ? normalized : null;
+}
+
+export async function exchangeWechatCode(
+  code: string,
+): Promise<{ openId: string; displayName: string | null }> {
   if (!CODE_PATTERN.test(code)) {
     throw new WechatOauthError("WECHAT_CODE_INVALID", "微信授权凭证无效。");
   }
@@ -139,7 +149,41 @@ export async function exchangeWechatCode(code: string): Promise<{ openId: string
       payload.openid.length >= 6 &&
       typeof payload.access_token === "string"
     ) {
-      return { openId: payload.openid };
+      const userInfoUrl = new URL("https://api.weixin.qq.com/sns/userinfo");
+      userInfoUrl.searchParams.set("access_token", payload.access_token);
+      userInfoUrl.searchParams.set("openid", payload.openid);
+      userInfoUrl.searchParams.set("lang", "zh_CN");
+      const userInfoResponse = await fetch(userInfoUrl, {
+        signal: controller.signal,
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      if (!userInfoResponse.ok) {
+        throw new WechatOauthError("WECHAT_UNAVAILABLE", "微信登录服务暂时不可用。");
+      }
+      const userInfo: unknown = await userInfoResponse.json();
+      if (
+        isRecord(userInfo) &&
+        typeof userInfo.openid === "string" &&
+        userInfo.openid !== payload.openid
+      ) {
+        throw new WechatOauthError("WECHAT_CODE_INVALID", "微信授权已失效，请重新进入。");
+      }
+      if (
+        isRecord(userInfo) &&
+        typeof userInfo.openid === "string"
+      ) {
+        return {
+          openId: payload.openid,
+          displayName: cleanWechatNickname(
+            typeof userInfo.nickname === "string" ? userInfo.nickname : undefined,
+          ),
+        };
+      }
+      if (isRecord(userInfo) && typeof userInfo.errcode === "number") {
+        throw new WechatOauthError("WECHAT_CODE_INVALID", "微信授权已失效，请重新进入。");
+      }
+      return { openId: payload.openid, displayName: null };
     }
     if (isRecord(payload) && typeof payload.errcode === "number") {
       throw new WechatOauthError("WECHAT_CODE_INVALID", "微信授权已失效，请重新进入。");
