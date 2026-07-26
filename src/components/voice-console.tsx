@@ -138,6 +138,18 @@ export function VoiceConsole({
     : isWechat
       ? "管理员开启公众号 AppID / AppSecret 后，这里会直接发起绑定。"
       : "请在微信中打开 voice.xdw0.cn，会自动生成你的匿名树洞账号。";
+  const accountStatus =
+    user.accountType === "wechat"
+      ? "微信已绑定"
+      : user.accountType === "guest"
+        ? "访客"
+        : "已登录";
+  const accountStatusTitle =
+    user.accountType === "wechat"
+      ? "已用微信绑定，当前仍是匿名树洞账号"
+      : user.accountType === "guest"
+        ? "当前是访客账号，绑定微信后每天可以继续聊"
+        : "后台账号已登录";
 
   useEffect(() => {
     const stored = window.localStorage.getItem(COMPANION_STORAGE_KEY);
@@ -179,6 +191,22 @@ export function VoiceConsole({
             <LockKeyhole size={13} />
             文字加密保存30天 · 不保存音频
           </span>
+          {user.accountType === "guest" && canStartWechatBinding ? (
+            <a
+              className="treehole-account-status is-action"
+              href={wechatBindHref}
+              title={accountStatusTitle}
+            >
+              绑定微信
+            </a>
+          ) : (
+            <span
+              className={`treehole-account-status is-${user.accountType}`}
+              title={accountStatusTitle}
+            >
+              {accountStatus}
+            </span>
+          )}
           <span className="treehole-user">{user.displayName}</span>
           {user.role === "admin" && (
             <Link href="/admin" className="treehole-icon-link" aria-label="管理后台">

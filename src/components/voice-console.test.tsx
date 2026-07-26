@@ -57,6 +57,13 @@ const guestUser: PublicUser = {
   },
 };
 
+const wechatUser: PublicUser = {
+  ...guestUser,
+  id: "wechat-1",
+  username: "wechat_abc",
+  accountType: "wechat",
+};
+
 describe("VoiceConsole WeChat guest prompt", () => {
   it("lets an in-WeChat guest bind WeChat instead of asking them to open WeChat again", () => {
     render(
@@ -69,6 +76,10 @@ describe("VoiceConsole WeChat guest prompt", () => {
       />,
     );
 
+    expect(screen.getByRole("link", { name: "绑定微信" })).toHaveAttribute(
+      "href",
+      "/api/auth/wechat/start?returnTo=/",
+    );
     expect(screen.getByText("你已经在微信里，点下方按钮绑定微信，授权后每天可以继续聊 10 分钟。")).toBeVisible();
     expect(screen.getByRole("link", { name: "绑定微信继续聊" })).toHaveAttribute(
       "href",
@@ -107,5 +118,20 @@ describe("VoiceConsole WeChat guest prompt", () => {
       "href",
       "/api/auth/wechat/start?returnTo=/",
     );
+  });
+
+  it("shows a clear bound state for WeChat accounts", () => {
+    render(
+      <VoiceConsole
+        user={wechatUser}
+        csrfToken="csrf"
+        defaultCompanion="breeze"
+        isWechat
+        canBindWechat
+      />,
+    );
+
+    expect(screen.getByText("微信已绑定")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "绑定微信" })).not.toBeInTheDocument();
   });
 });

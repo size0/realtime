@@ -949,6 +949,31 @@ select {
   background: rgba(7, 17, 15, 0.46);
 }
 
+.treehole-account-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(201, 216, 208, 0.1);
+  border-radius: 99px;
+  color: rgba(201, 216, 208, 0.62);
+  background: rgba(7, 17, 15, 0.36);
+  white-space: nowrap;
+}
+
+.treehole-account-status.is-action {
+  color: #edcf98;
+  border-color: rgba(231, 184, 106, 0.34);
+  background: rgba(231, 184, 106, 0.08);
+  text-decoration: none;
+}
+
+.treehole-account-status.is-wechat {
+  color: var(--jade);
+  border-color: rgba(66, 211, 172, 0.28);
+  background: rgba(66, 211, 172, 0.08);
+}
+
 .treehole-icon-link {
   display: grid;
   width: 34px;
@@ -1520,6 +1545,14 @@ select {
   .treehole-brand small,
   .treehole-privacy {
     display: none;
+  }
+
+  .treehole-account {
+    min-width: 0;
+  }
+
+  .treehole-account-status {
+    padding: 0 9px;
   }
 
   .treehole-user {
